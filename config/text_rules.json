@@ -1,0 +1,24 @@
+{
+  "filler_words": [
+    "えーと",
+    "あの",
+    "その",
+    "えっと",
+    "まあ",
+    "なんか"
+  ],
+  "habit_patterns": [
+    {
+      "pattern": "っていうか",
+      "replace": ""
+    },
+    {
+      "pattern": "そのー",
+      "replace": ""
+    },
+    {
+      "pattern": "みたいな感じ",
+      "replace": "ような"
+    }
+  ]
+}

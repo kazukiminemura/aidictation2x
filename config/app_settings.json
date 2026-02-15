@@ -1,0 +1,10 @@
+{
+  "sample_rate_hz": 16000,
+  "channels": 1,
+  "max_history_items": 10,
+  "log_level": "INFO",
+  "autosave_file": "data/last_session.json",
+  "history_file": "data/history.json",
+  "text_rules_file": "config/text_rules.json",
+  "vosk_model_dir": "models/vosk-model-ja"
+}
