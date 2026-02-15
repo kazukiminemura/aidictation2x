@@ -6,6 +6,7 @@ from tkinter import messagebox
 
 from src.audio_capture import AudioConfig
 from src.config_loader import load_json
+from src.personal_dictionary import PersonalDictionary
 from src.storage import Storage
 from src.ui_app import build_app
 
@@ -37,6 +38,9 @@ def main() -> None:
     )
 
     model_dir = root_dir / settings.get("vosk_model_dir", "models/vosk-model-ja")
+    personal_dictionary = PersonalDictionary(
+        root_dir / settings.get("personal_dictionary_file", "config/personal_dictionary.json")
+    )
 
     root = tk.Tk()
     try:
@@ -46,6 +50,8 @@ def main() -> None:
             audio_config=audio_config,
             storage=storage,
             rules=rules,
+            personal_dictionary=personal_dictionary,
+            enable_system_wide_input_default=bool(settings.get("enable_system_wide_input", True)),
         )
     except FileNotFoundError as exc:
         root.withdraw()
