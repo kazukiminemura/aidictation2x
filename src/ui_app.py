@@ -1,4 +1,4 @@
-import logging
+﻿import logging
 import threading
 import tkinter as tk
 from pathlib import Path
@@ -6,6 +6,7 @@ from tkinter import messagebox
 
 from .asr import ASREngine
 from .audio_capture import AudioConfig, AudioRecorder
+from .llm_post_editor import LLMOptions, LLMPostEditor
 from .personal_dictionary import PersonalDictionary
 from .storage import Storage
 from .system_wide_input import SystemWideInput
@@ -21,6 +22,8 @@ class VoiceInputApp:
         storage: Storage,
         rules: dict,
         personal_dictionary: PersonalDictionary,
+        llm_editor: LLMPostEditor,
+        llm_defaults: dict,
         enable_system_wide_input_default: bool,
     ):
         self.root = root
@@ -29,13 +32,15 @@ class VoiceInputApp:
         self.storage = storage
         self.rules = rules
         self.personal_dictionary = personal_dictionary
+        self.llm_editor = llm_editor
+        self.llm_defaults = llm_defaults
         self.logger = logging.getLogger(__name__)
 
         self.auto_edit_var = tk.BooleanVar(value=True)
         self.remove_fillers_var = tk.BooleanVar(value=True)
         self.remove_habits_var = tk.BooleanVar(value=True)
         self.system_wide_input_var = tk.BooleanVar(value=enable_system_wide_input_default)
-        self.status_var = tk.StringVar(value="起動中...")
+        self.status_var = tk.StringVar(value="Starting...")
         self.current_raw_text = ""
         self.hotkey_pressed = False
 
@@ -54,7 +59,7 @@ class VoiceInputApp:
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _build_ui(self) -> None:
-        self.root.title("音声入力アプリ")
+        self.root.title("Voice Input App")
         self.root.geometry("430x840")
         self.root.configure(bg="#0a0e14")
 
@@ -69,7 +74,7 @@ class VoiceInputApp:
         )
         tk.Label(
             top_bar,
-            text="音声入力",
+            text="Voice Input",
             fg="#e6edf3",
             bg="#141b26",
             font=("Consolas", 11, "bold"),
@@ -87,7 +92,7 @@ class VoiceInputApp:
 
         self.record_button = tk.Button(
             controls,
-            text="録音開始",
+            text="Start Recording",
             command=self.toggle_recording,
             bg="#1f6feb",
             fg="#ffffff",
@@ -103,7 +108,7 @@ class VoiceInputApp:
 
         tk.Checkbutton(
             controls,
-            text="自動編集",
+            text="Auto edit",
             variable=self.auto_edit_var,
             bg="#0a0e14",
             fg="#c9d1d9",
@@ -114,7 +119,7 @@ class VoiceInputApp:
         ).pack(side=tk.LEFT, padx=(12, 4))
         tk.Checkbutton(
             controls,
-            text="フィラーワード除去",
+            text="Remove fillers",
             variable=self.remove_fillers_var,
             bg="#0a0e14",
             fg="#c9d1d9",
@@ -125,7 +130,7 @@ class VoiceInputApp:
         ).pack(side=tk.LEFT, padx=4)
         tk.Checkbutton(
             controls,
-            text="話し癖除去",
+            text="Remove habits",
             variable=self.remove_habits_var,
             bg="#0a0e14",
             fg="#c9d1d9",
@@ -139,7 +144,7 @@ class VoiceInputApp:
         system_frame.pack(fill=tk.X, pady=(0, 8))
         tk.Checkbutton(
             system_frame,
-            text="システム横断入力（完了後にアクティブアプリへ貼り付け）",
+            text="System-wide input (paste to active app on completion)",
             variable=self.system_wide_input_var,
             command=self._toggle_system_wide_input,
             bg="#0a0e14",
@@ -151,7 +156,7 @@ class VoiceInputApp:
         ).pack(anchor=tk.W)
         tk.Label(
             system_frame,
-            text="グローバルホットキー: Ctrl+Shift+Space",
+            text="Global hotkey: Ctrl+Shift+Space",
             fg="#8b9fb6",
             bg="#0a0e14",
             anchor="w",
@@ -162,7 +167,7 @@ class VoiceInputApp:
         dict_frame.pack(fill=tk.X, pady=(0, 8))
         tk.Label(
             dict_frame,
-            text="パーソナル辞書（読み -> 表記）",
+            text="Personal Dictionary (reading -> surface)",
             fg="#8b9fb6",
             bg="#0a0e14",
             anchor="w",
@@ -171,7 +176,7 @@ class VoiceInputApp:
 
         form = tk.Frame(dict_frame, bg="#0a0e14")
         form.pack(fill=tk.X, padx=6, pady=(0, 4))
-        tk.Label(form, text="読み", fg="#c9d1d9", bg="#0a0e14", font=("Consolas", 9)).pack(side=tk.LEFT)
+        tk.Label(form, text="Reading", fg="#c9d1d9", bg="#0a0e14", font=("Consolas", 9)).pack(side=tk.LEFT)
         self.dict_reading_entry = tk.Entry(
             form,
             width=10,
@@ -181,7 +186,7 @@ class VoiceInputApp:
             relief=tk.FLAT,
         )
         self.dict_reading_entry.pack(side=tk.LEFT, padx=(4, 8))
-        tk.Label(form, text="表記", fg="#c9d1d9", bg="#0a0e14", font=("Consolas", 9)).pack(side=tk.LEFT)
+        tk.Label(form, text="Surface", fg="#c9d1d9", bg="#0a0e14", font=("Consolas", 9)).pack(side=tk.LEFT)
         self.dict_surface_entry = tk.Entry(
             form,
             width=10,
@@ -193,7 +198,7 @@ class VoiceInputApp:
         self.dict_surface_entry.pack(side=tk.LEFT, padx=(4, 8))
         tk.Button(
             form,
-            text="学習登録",
+            text="Add",
             command=self._add_dictionary_entry,
             bg="#2ea043",
             fg="#ffffff",
@@ -202,7 +207,7 @@ class VoiceInputApp:
         ).pack(side=tk.LEFT)
         tk.Button(
             form,
-            text="選択削除",
+            text="Remove",
             command=self._remove_dictionary_entry,
             bg="#b62324",
             fg="#ffffff",
@@ -225,7 +230,7 @@ class VoiceInputApp:
 
         final_title = tk.Label(
             container,
-            text="最終結果",
+            text="Final text",
             fg="#8b9fb6",
             bg="#0a0e14",
             anchor="w",
@@ -250,7 +255,7 @@ class VoiceInputApp:
         if auto:
             self.current_raw_text = auto.raw_text
             self.final_text.insert("1.0", auto.final_text)
-        self.status_var.set("待機中（Ctrl+Space / Ctrl+Shift+Space）")
+        self.status_var.set("Ready (Ctrl+Space / Ctrl+Shift+Space)")
 
     def _bind_hotkeys(self) -> None:
         self.root.bind_all("<Control-KeyPress-space>", self._on_hotkey_press)
@@ -272,10 +277,10 @@ class VoiceInputApp:
     def _toggle_system_wide_input(self) -> None:
         if self.system_wide_input_var.get():
             self.system_wide_input.start()
-            self.status_var.set("システム横断入力: ON")
+            self.status_var.set("System-wide input: ON")
         else:
             self.system_wide_input.stop()
-            self.status_var.set("システム横断入力: OFF")
+            self.status_var.set("System-wide input: OFF")
 
     def _refresh_dictionary_list(self) -> None:
         self.dict_entries = self.personal_dictionary.list_entries()
@@ -300,58 +305,87 @@ class VoiceInputApp:
                 surface=self.dict_surface_entry.get(),
             )
         except ValueError as exc:
-            messagebox.showwarning("入力不足", str(exc))
+            messagebox.showwarning("Input missing", str(exc))
             return
         self._refresh_dictionary_list()
-        self.status_var.set("辞書を学習登録しました")
+        self.status_var.set("Dictionary updated")
 
     def _remove_dictionary_entry(self) -> None:
         reading = self.dict_reading_entry.get().strip()
         if not reading:
-            messagebox.showwarning("削除対象なし", "削除する読みを選択してください。")
+            messagebox.showwarning("No target", "Please select a reading to remove.")
             return
         self.personal_dictionary.remove(reading)
         self._refresh_dictionary_list()
-        self.status_var.set("辞書から削除しました")
+        self.status_var.set("Dictionary removed")
 
     def toggle_recording(self) -> None:
         if not self.recorder.is_recording:
             try:
                 self.recorder.start()
-                self.record_button.config(text="録音停止", bg="#b62324", activebackground="#d73a49")
-                self.status_var.set("録音中")
+                self.record_button.config(text="Stop Recording", bg="#b62324", activebackground="#d73a49")
+                self.status_var.set("Recording")
             except Exception as exc:  # noqa: BLE001
-                messagebox.showerror("録音エラー", str(exc))
+                messagebox.showerror("Recording error", str(exc))
                 self.logger.exception("Failed to start recording")
             return
 
-        self.record_button.config(text="録音開始", bg="#1f6feb", activebackground="#2f81f7")
-        self.status_var.set("文字起こし中")
+        self.record_button.config(text="Start Recording", bg="#1f6feb", activebackground="#2f81f7")
+        self.status_var.set("Transcribing")
 
         audio = self.recorder.stop()
         threading.Thread(target=self._transcribe_and_process, args=(audio,), daemon=True).start()
 
     def _transcribe_and_process(self, audio_data) -> None:  # noqa: ANN001
         try:
-            raw = self.asr_engine.transcribe(audio_data)
-            raw = self.personal_dictionary.apply(raw)
-            options = ProcessOptions(
-                auto_edit=self.auto_edit_var.get(),
-                remove_fillers=self.remove_fillers_var.get(),
-                remove_habits=self.remove_habits_var.get(),
+            raw_asr = self.asr_engine.transcribe(audio_data)
+            raw = self.personal_dictionary.apply(raw_asr)
+            process_result = process_text(
+                raw,
+                self.rules,
+                ProcessOptions(
+                    auto_edit=self.auto_edit_var.get(),
+                    remove_fillers=self.remove_fillers_var.get(),
+                    remove_habits=self.remove_habits_var.get(),
+                ),
             )
-            final = process_text(raw, self.rules, options)
-            self.storage.save_autosave(raw, final)
-            self.storage.append_history(raw, final)
-            self.root.after(0, self._apply_results, raw, final, "")
+
+            llm_result = self.llm_editor.refine(
+                raw_text=raw_asr,
+                preprocessed_text=process_result.final_text,
+                options=LLMOptions(
+                    enabled=bool(self.llm_defaults.get("enabled", True)),
+                    strength=str(self.llm_defaults.get("strength", "medium")),
+                    max_input_chars=int(self.llm_defaults.get("max_input_chars", 1200)),
+                    max_change_ratio=float(self.llm_defaults.get("max_change_ratio", 0.35)),
+                    domain_hint=str(self.llm_defaults.get("domain_hint", "")),
+                ),
+            )
+
+            final = llm_result.final_text
+            self.storage.save_autosave(
+                raw,
+                final,
+                llm_applied=llm_result.applied,
+                llm_latency_ms=llm_result.latency_ms,
+                fallback_reason=llm_result.fallback_reason,
+            )
+            self.storage.append_history(
+                raw,
+                final,
+                llm_applied=llm_result.applied,
+                llm_latency_ms=llm_result.latency_ms,
+                fallback_reason=llm_result.fallback_reason,
+            )
+            self.root.after(0, self._apply_results, raw, final, "", llm_result.fallback_reason)
         except Exception as exc:  # noqa: BLE001
             self.logger.exception("Pipeline failed")
-            self.root.after(0, self._apply_results, "", "", str(exc))
+            self.root.after(0, self._apply_results, "", "", str(exc), "")
 
-    def _apply_results(self, raw: str, final: str, error: str) -> None:
+    def _apply_results(self, raw: str, final: str, error: str, fallback_reason: str = "") -> None:
         if error:
-            self.status_var.set("エラー")
-            messagebox.showerror("処理エラー", error)
+            self.status_var.set("Error")
+            messagebox.showerror("Processing error", error)
             return
 
         self._set_text(self.final_text, final)
@@ -359,12 +393,18 @@ class VoiceInputApp:
         if self.system_wide_input_var.get():
             try:
                 self.system_wide_input.paste_to_active_app(final)
-                self.status_var.set("完了（他アプリへ入力）")
+                if fallback_reason and fallback_reason not in {"", "disabled"}:
+                    self.status_var.set(f"Done (fallback: {fallback_reason})")
+                else:
+                    self.status_var.set("Done (pasted to active app)")
             except Exception as exc:  # noqa: BLE001
-                self.status_var.set("完了（貼り付け失敗）")
-                messagebox.showwarning("貼り付け失敗", str(exc))
+                self.status_var.set("Done (paste failed)")
+                messagebox.showwarning("Paste failed", str(exc))
         else:
-            self.status_var.set("完了")
+            if fallback_reason and fallback_reason not in {"", "disabled"}:
+                self.status_var.set(f"Done (fallback: {fallback_reason})")
+            else:
+                self.status_var.set("Done")
 
     def _on_close(self) -> None:
         self.system_wide_input.stop()
@@ -384,9 +424,16 @@ def build_app(
     rules: dict,
     personal_dictionary: PersonalDictionary,
     enable_system_wide_input_default: bool,
+    llm_defaults: dict,
 ) -> VoiceInputApp:
     engine = ASREngine(model_dir=model_dir, sample_rate_hz=audio_config.sample_rate_hz)
     recorder = AudioRecorder(config=audio_config)
+    llm_editor = LLMPostEditor(
+        model_path=Path(str(llm_defaults.get("model_path", "OpenVINO/Qwen3-8B-int4-cw-ov"))),
+        timeout_ms=int(llm_defaults.get("timeout_ms", 8000)),
+        blocked_patterns=list(llm_defaults.get("blocked_patterns", [])),
+        llm_device=str(llm_defaults.get("device", "CPU")),
+    )
     return VoiceInputApp(
         root=root,
         asr_engine=engine,
@@ -394,5 +441,7 @@ def build_app(
         storage=storage,
         rules=rules,
         personal_dictionary=personal_dictionary,
+        llm_editor=llm_editor,
+        llm_defaults=llm_defaults,
         enable_system_wide_input_default=enable_system_wide_input_default,
     )

@@ -1,5 +1,8 @@
-vosk==0.3.45
+﻿vosk==0.3.45
 sounddevice==0.4.7
 numpy==1.26.4
 pynput==1.7.7
 pyperclip==1.9.0
+openvino>=2025.0.0
+openvino-genai>=2025.0.0
+pytest==8.3.5

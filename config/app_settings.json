@@ -1,4 +1,4 @@
-{
+﻿{
   "sample_rate_hz": 16000,
   "channels": 1,
   "max_history_items": 10,
@@ -8,5 +8,14 @@
   "text_rules_file": "config/text_rules.json",
   "vosk_model_dir": "models/vosk-model-ja",
   "personal_dictionary_file": "config/personal_dictionary.json",
-  "enable_system_wide_input": true
+  "enable_system_wide_input": true,
+  "llm_enabled": true,
+  "llm_model_path": "OpenVINO/Qwen3-8B-int4-cw-ov",
+  "llm_strength": "medium",
+  "llm_max_input_chars": 1200,
+  "llm_max_change_ratio": 0.35,
+  "llm_domain_hint": "",
+  "llm_timeout_ms": 8000,
+  "llm_blocked_patterns": [],
+  "llm_device": "CPU"
 }

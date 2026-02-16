@@ -22,7 +22,7 @@ class PersonalDictionary:
         if not self.dictionary_file.exists():
             self.save()
             return
-        with self.dictionary_file.open("r", encoding="utf-8") as fp:
+        with self.dictionary_file.open("r", encoding="utf-8-sig") as fp:
             payload = json.load(fp)
         entries = payload.get("entries", [])
         self._entries = {}

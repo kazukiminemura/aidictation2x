@@ -1,4 +1,4 @@
-import json
+﻿import json
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
@@ -10,6 +10,9 @@ class HistoryItem:
     timestamp: str
     raw_text: str
     final_text: str
+    llm_applied: bool = False
+    llm_latency_ms: int = 0
+    fallback_reason: str = ""
 
 
 class Storage:
@@ -20,12 +23,22 @@ class Storage:
         self.history_file.parent.mkdir(parents=True, exist_ok=True)
         self.autosave_file.parent.mkdir(parents=True, exist_ok=True)
 
-    def save_autosave(self, raw_text: str, final_text: str) -> None:
+    def save_autosave(
+        self,
+        raw_text: str,
+        final_text: str,
+        llm_applied: bool = False,
+        llm_latency_ms: int = 0,
+        fallback_reason: str = "",
+    ) -> None:
         payload = asdict(
             HistoryItem(
                 timestamp=datetime.now().isoformat(timespec="seconds"),
                 raw_text=raw_text,
                 final_text=final_text,
+                llm_applied=llm_applied,
+                llm_latency_ms=llm_latency_ms,
+                fallback_reason=fallback_reason,
             )
         )
         with self.autosave_file.open("w", encoding="utf-8") as fp:
@@ -34,11 +47,18 @@ class Storage:
     def load_autosave(self) -> HistoryItem | None:
         if not self.autosave_file.exists():
             return None
-        with self.autosave_file.open("r", encoding="utf-8") as fp:
+        with self.autosave_file.open("r", encoding="utf-8-sig") as fp:
             payload = json.load(fp)
-        return HistoryItem(**payload)
+        return self._to_history_item(payload)
 
-    def append_history(self, raw_text: str, final_text: str) -> None:
+    def append_history(
+        self,
+        raw_text: str,
+        final_text: str,
+        llm_applied: bool = False,
+        llm_latency_ms: int = 0,
+        fallback_reason: str = "",
+    ) -> None:
         current = self.load_history()
         current.insert(
             0,
@@ -46,6 +66,9 @@ class Storage:
                 timestamp=datetime.now().isoformat(timespec="seconds"),
                 raw_text=raw_text,
                 final_text=final_text,
+                llm_applied=llm_applied,
+                llm_latency_ms=llm_latency_ms,
+                fallback_reason=fallback_reason,
             ),
         )
         current = current[: self.max_items]
@@ -56,6 +79,17 @@ class Storage:
     def load_history(self) -> List[HistoryItem]:
         if not self.history_file.exists():
             return []
-        with self.history_file.open("r", encoding="utf-8") as fp:
+        with self.history_file.open("r", encoding="utf-8-sig") as fp:
             payload = json.load(fp)
-        return [HistoryItem(**item) for item in payload]
+        return [self._to_history_item(item) for item in payload]
+
+    @staticmethod
+    def _to_history_item(payload: dict) -> HistoryItem:
+        return HistoryItem(
+            timestamp=payload.get("timestamp", ""),
+            raw_text=payload.get("raw_text", ""),
+            final_text=payload.get("final_text", ""),
+            llm_applied=bool(payload.get("llm_applied", False)),
+            llm_latency_ms=int(payload.get("llm_latency_ms", 0)),
+            fallback_reason=str(payload.get("fallback_reason", "")),
+        )

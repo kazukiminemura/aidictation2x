@@ -1,5 +1,4 @@
-import json
-import logging
+﻿import logging
 import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox
@@ -42,6 +41,18 @@ def main() -> None:
         root_dir / settings.get("personal_dictionary_file", "config/personal_dictionary.json")
     )
 
+    llm_defaults = {
+        "enabled": bool(settings.get("llm_enabled", True)),
+        "model_path": str(settings.get("llm_model_path", "OpenVINO/Qwen3-8B-int4-cw-ov")),
+        "strength": str(settings.get("llm_strength", "medium")),
+        "max_input_chars": int(settings.get("llm_max_input_chars", 1200)),
+        "max_change_ratio": float(settings.get("llm_max_change_ratio", 0.35)),
+        "domain_hint": str(settings.get("llm_domain_hint", "")),
+        "timeout_ms": int(settings.get("llm_timeout_ms", 8000)),
+        "blocked_patterns": list(settings.get("llm_blocked_patterns", [])),
+        "device": str(settings.get("llm_device", "CPU")),
+    }
+
     root = tk.Tk()
     try:
         build_app(
@@ -52,10 +63,11 @@ def main() -> None:
             rules=rules,
             personal_dictionary=personal_dictionary,
             enable_system_wide_input_default=bool(settings.get("enable_system_wide_input", True)),
+            llm_defaults=llm_defaults,
         )
     except FileNotFoundError as exc:
         root.withdraw()
-        messagebox.showerror("モデル未配置", str(exc))
+        messagebox.showerror("Model not found", str(exc))
         root.destroy()
         return
     root.mainloop()

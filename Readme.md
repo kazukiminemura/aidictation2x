@@ -1,37 +1,49 @@
-# 音声入力アプリ MVP
+﻿# AI Dictation 2x (ASR + OpenVINO LLM)
 
-`docs/mvp_requirements.md` の要件に沿って、ローカル完結のMVPアプリを実装しました。
+This app records microphone audio, runs local ASR (Vosk), applies text cleanup rules,
+and then post-edits text with a local OpenVINO LLM backend.
 
-## 実装機能（MVP）
-- 録音開始/停止（同一セッションで文字起こし）
-- システム横断入力（グローバルホットキー `Ctrl+Shift+Space`）
-- ローカルASR（Vosk, 日本語モデル）
-- 自動編集（句読点、空白整形）
-- フィラーワード除去（ON/OFF）
-- 話し癖除去（ON/OFF）
-- パーソナル辞書（固有名詞などの学習）
-- 履歴保存（直近N件、初期10件）と直近結果の一時保存
+## Features
+- Push-to-talk recording (`Ctrl+Space`)
+- Optional system-wide paste (`Ctrl+Shift+Space`)
+- Local ASR (Vosk)
+- Rule-based cleanup (fillers, habits, punctuation)
+- Personal dictionary (reading -> surface)
+- Local OpenVINO LLM post-edit with quality gate and fallback
+- History/autosave with LLM metadata
 
-## セットアップ
-1. 依存関係をインストール
+## Setup
+1. Install dependencies
 ```bash
 pip install -r requirements.txt
 ```
-2. Vosk日本語モデルをダウンロードして配置
-- 配置先: `models/vosk-model-ja`
-- 例: `models/vosk-model-ja/am/final.mdl` のような構成になること
 
-3. 起動
+2. Place a Japanese Vosk model under:
+- `models/vosk-model-ja`
+- expected file example: `models/vosk-model-ja/am/final.mdl`
+
+3. Ensure OpenVINO model is available as:
+- `OpenVINO/Qwen3-8B-int4-cw-ov` (HF/OpenVINO model id)
+- or set `llm_model_path` in `config/app_settings.json` to your local OpenVINO model directory
+
+4. Run
 ```bash
 python main.py
 ```
 
-## 設定ファイル
-- アプリ設定: `config/app_settings.json`
-- フィラーワード/話し癖ルール: `config/text_rules.json`
-- パーソナル辞書: `config/personal_dictionary.json`
+## LLM settings
+`config/app_settings.json` keys:
+- `llm_enabled`
+- `llm_model_path`
+- `llm_strength` (`weak` | `medium` | `strong`)
+- `llm_max_input_chars`
+- `llm_max_change_ratio`
+- `llm_domain_hint`
+- `llm_timeout_ms`
+- `llm_blocked_patterns`
+- `llm_device` (`CPU`, etc.)
 
-## 注意
-- 外部API呼び出しは行いません（ローカル処理のみ）。
-- モデル未配置、マイク未接続、権限拒否時はエラーメッセージを表示します。
-- システム横断入力ON時は、変換完了後にアクティブなアプリへ自動貼り付けします。
+## Tests
+```bash
+python -m pytest -q
+```

@@ -1,4 +1,4 @@
-import difflib
+﻿import difflib
 import re
 from dataclasses import dataclass
 from typing import Dict, List
@@ -11,6 +11,14 @@ class ProcessOptions:
     remove_habits: bool = True
 
 
+@dataclass
+class ProcessResult:
+    preprocessed_text: str
+    final_text: str
+    edits: List[str]
+    fallback_reason: str | None = None
+
+
 def _normalize_whitespace(text: str) -> str:
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
@@ -20,7 +28,7 @@ def _normalize_whitespace(text: str) -> str:
 def _append_terminal_punctuation(text: str) -> str:
     if not text:
         return text
-    if text[-1] in "。！？!?":
+    if text[-1] in "。．.!！？?":
         return text
     return f"{text}。"
 
@@ -47,17 +55,40 @@ def _remove_habits(text: str, habit_patterns: List[Dict[str, str]]) -> str:
 
 
 def _auto_edit(text: str) -> str:
-    # MVPでは簡易整形のみを実施。
     text = _normalize_whitespace(text)
     text = _append_terminal_punctuation(text)
     return text
+
+
+def create_edit_list(before: str, after: str, max_items: int = 8) -> List[str]:
+    if before == after:
+        return []
+
+    edits: List[str] = []
+    matcher = difflib.SequenceMatcher(a=before, b=after)
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            continue
+        old = before[i1:i2].strip()
+        new = after[j1:j2].strip()
+        if tag == "replace" and old and new:
+            edits.append(f"{old} -> {new}")
+        elif tag == "delete" and old:
+            edits.append(f"- {old}")
+        elif tag == "insert" and new:
+            edits.append(f"+ {new}")
+
+        if len(edits) >= max_items:
+            break
+
+    return edits
 
 
 def process_text(
     raw_text: str,
     rules: Dict[str, List[Dict[str, str]]],
     options: ProcessOptions,
-) -> str:
+) -> ProcessResult:
     output = raw_text
     if options.remove_fillers:
         output = _remove_fillers(output, rules.get("filler_words", []))
@@ -65,7 +96,12 @@ def process_text(
         output = _remove_habits(output, rules.get("habit_patterns", []))
     if options.auto_edit:
         output = _auto_edit(output)
-    return output
+
+    return ProcessResult(
+        preprocessed_text=output,
+        final_text=output,
+        edits=create_edit_list(raw_text, output),
+    )
 
 
 def create_diff_text(before: str, after: str) -> str:
