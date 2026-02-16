@@ -26,9 +26,12 @@ class VoiceInputApp:
         personal_dictionary: PersonalDictionary,
         llm_editor: LLMPostEditor,
         llm_defaults: dict,
+        asr_defaults: dict,
+        root_dir: Path,
         enable_system_wide_input_default: bool,
     ):
         self.root = root
+        self.root_dir = root_dir
         self.asr_engine = asr_engine
         self.recorder = recorder
         self.storage = storage
@@ -36,6 +39,7 @@ class VoiceInputApp:
         self.personal_dictionary = personal_dictionary
         self.llm_editor = llm_editor
         self.llm_defaults = llm_defaults
+        self.asr_defaults = asr_defaults
         self.logger = logging.getLogger(__name__)
 
         self.auto_edit_var = tk.BooleanVar(value=True)
@@ -47,6 +51,14 @@ class VoiceInputApp:
         self.current_raw_text = ""
         self.hotkey_pressed = False
         self.llm_enabled_var = tk.BooleanVar(value=bool(self.llm_defaults.get("enabled", True)))
+        self.asr_backend_var = tk.StringVar(value=str(self.asr_defaults.get("backend", "vosk")))
+        self.whisper_model_name_var = tk.StringVar(
+            value=str(self.asr_defaults.get("whisper_model_name", "OpenVINO/whisper-large-v3-int8-ov"))
+        )
+        self.whisper_device_var = tk.StringVar(value=str(self.asr_defaults.get("whisper_device", "auto")))
+        self.whisper_compute_type_var = tk.StringVar(
+            value=str(self.asr_defaults.get("whisper_compute_type", "int8"))
+        )
         self.properties_window: tk.Toplevel | None = None
 
         self.system_wide_input = SystemWideInput(
@@ -248,7 +260,7 @@ class VoiceInputApp:
 
         win = tk.Toplevel(self.root)
         win.title("Properties")
-        win.geometry("360x280")
+        win.geometry("420x570")
         win.resizable(False, False)
         win.transient(self.root)
         self.properties_window = win
@@ -259,6 +271,10 @@ class VoiceInputApp:
         business_email_var = tk.BooleanVar(value=self.business_email_var.get())
         system_wide_var = tk.BooleanVar(value=self.system_wide_input_var.get())
         llm_enabled_var = tk.BooleanVar(value=self.llm_enabled_var.get())
+        asr_backend_var = tk.StringVar(value=self.asr_backend_var.get())
+        whisper_model_name_var = tk.StringVar(value=self.whisper_model_name_var.get())
+        whisper_device_var = tk.StringVar(value=self.whisper_device_var.get())
+        whisper_compute_type_var = tk.StringVar(value=self.whisper_compute_type_var.get())
 
         frame = tk.Frame(win, padx=12, pady=12)
         frame.pack(fill=tk.BOTH, expand=True)
@@ -273,6 +289,35 @@ class VoiceInputApp:
             text="System-wide input (paste to active app on completion)",
             variable=system_wide_var,
         ).pack(anchor=tk.W, pady=4)
+        tk.Label(frame, text="ASR backend").pack(anchor=tk.W, pady=(8, 0))
+        tk.OptionMenu(frame, asr_backend_var, "vosk", "whisper").pack(anchor=tk.W, fill=tk.X)
+        tk.Label(frame, text="Whisper model name").pack(anchor=tk.W, pady=(8, 0))
+        tk.Entry(frame, textvariable=whisper_model_name_var).pack(anchor=tk.W, fill=tk.X)
+        tk.Label(frame, text="Whisper device").pack(anchor=tk.W, pady=(8, 0))
+        tk.OptionMenu(frame, whisper_device_var, "auto", "cpu", "cuda").pack(anchor=tk.W, fill=tk.X)
+        tk.Label(frame, text="Whisper compute type").pack(anchor=tk.W, pady=(8, 0))
+        tk.OptionMenu(
+            frame,
+            whisper_compute_type_var,
+            "int8",
+            "int8_float16",
+            "float16",
+            "float32",
+        ).pack(anchor=tk.W, fill=tk.X)
+        tk.Button(
+            frame,
+            text="Download ASR Model (Whisper)",
+            command=lambda: download_asr_model_from_dialog(),
+            bg="#1f6feb",
+            fg="#ffffff",
+            activebackground="#2f81f7",
+            activeforeground="#ffffff",
+            relief=tk.FLAT,
+            padx=10,
+            pady=4,
+            font=("Consolas", 9, "bold"),
+            cursor="hand2",
+        ).pack(anchor=tk.W, pady=(8, 0))
         tk.Button(
             frame,
             text="Download LLM Model",
@@ -288,6 +333,16 @@ class VoiceInputApp:
             cursor="hand2",
         ).pack(anchor=tk.W, pady=(10, 0))
 
+        def download_asr_model_from_dialog() -> None:
+            model_name = whisper_model_name_var.get().strip() or "OpenVINO/whisper-large-v3-int8-ov"
+            device = whisper_device_var.get().strip() or "auto"
+            compute_type = whisper_compute_type_var.get().strip() or "int8"
+            self._download_asr_model_clicked(
+                model_name=model_name,
+                device=device,
+                compute_type=compute_type,
+            )
+
         def apply_and_close() -> None:
             self.auto_edit_var.set(auto_edit_var.get())
             self.remove_fillers_var.set(remove_fillers_var.get())
@@ -295,6 +350,13 @@ class VoiceInputApp:
             self.business_email_var.set(business_email_var.get())
             self.llm_enabled_var.set(llm_enabled_var.get())
             self.llm_defaults["enabled"] = bool(llm_enabled_var.get())
+            self.asr_backend_var.set(asr_backend_var.get())
+            self.whisper_model_name_var.set(
+                whisper_model_name_var.get().strip() or "OpenVINO/whisper-large-v3-int8-ov"
+            )
+            self.whisper_device_var.set(whisper_device_var.get())
+            self.whisper_compute_type_var.set(whisper_compute_type_var.get())
+            self._apply_asr_settings()
 
             before = self.system_wide_input_var.get()
             after = system_wide_var.get()
@@ -336,6 +398,64 @@ class VoiceInputApp:
         else:
             self.system_wide_input.stop()
             self.status_var.set("System-wide input: OFF")
+
+    def _apply_asr_settings(self) -> None:
+        backend = self.asr_backend_var.get().strip().lower() or "vosk"
+        whisper_model_name = (
+            self.whisper_model_name_var.get().strip() or "OpenVINO/whisper-large-v3-int8-ov"
+        )
+        whisper_device = self.whisper_device_var.get().strip() or "auto"
+        whisper_compute_type = self.whisper_compute_type_var.get().strip() or "int8"
+        vosk_model_dir = self.root_dir / str(self.asr_defaults.get("vosk_model_dir", "models/vosk-model-ja"))
+        whisper_download_dir = self.root_dir / str(self.asr_defaults.get("whisper_download_dir", "models/whisper"))
+
+        self.asr_defaults["backend"] = backend
+        self.asr_defaults["whisper_model_name"] = whisper_model_name
+        self.asr_defaults["whisper_device"] = whisper_device
+        self.asr_defaults["whisper_compute_type"] = whisper_compute_type
+        self.asr_defaults["whisper_download_dir"] = str(whisper_download_dir)
+
+        self.asr_engine.configure(
+            backend=backend,
+            vosk_model_dir=vosk_model_dir,
+            whisper_model_name=whisper_model_name,
+            whisper_device=whisper_device,
+            whisper_compute_type=whisper_compute_type,
+            whisper_download_dir=whisper_download_dir,
+        )
+
+    def _download_asr_model_clicked(self, model_name: str, device: str, compute_type: str) -> None:
+        self.status_var.set("Downloading ASR model...")
+        threading.Thread(
+            target=self._download_asr_model_worker,
+            args=(model_name, device, compute_type),
+            daemon=True,
+        ).start()
+
+    def _download_asr_model_worker(self, model_name: str, device: str, compute_type: str) -> None:
+        try:
+            whisper_download_dir = self.root_dir / str(
+                self.asr_defaults.get("whisper_download_dir", "models/whisper")
+            )
+            self.asr_engine.configure(
+                whisper_model_name=model_name,
+                whisper_device=device,
+                whisper_compute_type=compute_type,
+                whisper_download_dir=whisper_download_dir,
+            )
+            model_path = self.asr_engine.download_whisper_model(model_name=model_name)
+            self.root.after(0, self._on_download_asr_model_done, model_path, "")
+        except Exception as exc:  # noqa: BLE001
+            self.logger.exception("ASR model download failed")
+            self.root.after(0, self._on_download_asr_model_done, "", str(exc))
+
+    def _on_download_asr_model_done(self, model_path: str, error: str) -> None:
+        if error:
+            self.status_var.set("ASR model download failed")
+            messagebox.showerror("ASR model download error", error)
+            return
+        self.status_var.set("ASR model ready")
+        messagebox.showinfo("ASR model", f"Model is ready at:\n{model_path}")
 
     def _download_model_clicked(self) -> None:
         self.status_var.set("Downloading LLM model...")
@@ -545,15 +665,24 @@ class VoiceInputApp:
 
 def build_app(
     root: tk.Tk,
-    model_dir: Path,
+    root_dir: Path,
     audio_config: AudioConfig,
     storage: Storage,
     rules: dict,
     personal_dictionary: PersonalDictionary,
     enable_system_wide_input_default: bool,
     llm_defaults: dict,
+    asr_defaults: dict,
 ) -> VoiceInputApp:
-    engine = ASREngine(model_dir=model_dir, sample_rate_hz=audio_config.sample_rate_hz)
+    engine = ASREngine(
+        sample_rate_hz=audio_config.sample_rate_hz,
+        backend=str(asr_defaults.get("backend", "vosk")),
+        vosk_model_dir=root_dir / str(asr_defaults.get("vosk_model_dir", "models/vosk-model-ja")),
+        whisper_model_name=str(asr_defaults.get("whisper_model_name", "OpenVINO/whisper-large-v3-int8-ov")),
+        whisper_device=str(asr_defaults.get("whisper_device", "auto")),
+        whisper_compute_type=str(asr_defaults.get("whisper_compute_type", "int8")),
+        whisper_download_dir=root_dir / str(asr_defaults.get("whisper_download_dir", "models/whisper")),
+    )
     recorder = AudioRecorder(config=audio_config)
     llm_editor = LLMPostEditor(
         model_path=Path(str(llm_defaults.get("model_path", "OpenVINO/Qwen3-8B-int4-cw-ov"))),
@@ -572,5 +701,7 @@ def build_app(
         personal_dictionary=personal_dictionary,
         llm_editor=llm_editor,
         llm_defaults=llm_defaults,
+        asr_defaults=asr_defaults,
+        root_dir=root_dir,
         enable_system_wide_input_default=enable_system_wide_input_default,
     )

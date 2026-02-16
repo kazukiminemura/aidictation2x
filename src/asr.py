@@ -9,7 +9,7 @@ _WHISPER_MODEL_REPOS = {
     "base": "OpenVINO/whisper-base",
     "small": "OpenVINO/whisper-small",
     "medium": "OpenVINO/whisper-medium",
-    "large-v3": "OpenVINO/whisper-large-v3",
+    "large-v3": "OpenVINO/whisper-large-v3-int8-ov",
     "large-v3-turbo": "OpenVINO/whisper-large-v3-turbo",
 }
 
@@ -45,8 +45,7 @@ class _WhisperEngine:
         ov_device = _to_openvino_device(device)
         self.pipeline = ov_genai.WhisperPipeline(model_name, ov_device)
         self.generation_config = ov_genai.WhisperGenerationConfig()
-        # OpenVINO Whisper expects language token format like <|ja|>.
-        self.generation_config.language = "<|ja|>"
+        self.generation_config.language = _select_japanese_language_key(self.generation_config)
         self.generation_config.task = "transcribe"
         self.generation_config.return_timestamps = False
 
@@ -70,7 +69,7 @@ class ASREngine:
         sample_rate_hz: int,
         backend: str = "vosk",
         vosk_model_dir: Path | None = None,
-        whisper_model_name: str = "large-v3",
+        whisper_model_name: str = "OpenVINO/whisper-large-v3-int8-ov",
         whisper_device: str = "auto",
         whisper_compute_type: str = "int8",
         whisper_download_dir: Path | None = None,
@@ -177,6 +176,14 @@ class ASREngine:
         if _looks_like_openvino_model_dir(cached_model_dir):
             return str(cached_model_dir)
 
+        # Fallback: auto-download when no local model is available.
+        try:
+            downloaded_path = self.download_whisper_model(model_name=model_name)
+            if _looks_like_openvino_model_dir(Path(downloaded_path)):
+                return downloaded_path
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(f"whisper_model_download_failed: {exc}") from exc
+
         raise RuntimeError(
             "whisper_model_not_found. Please pre-download from Properties -> Download ASR Model (Whisper)."
         )
@@ -212,3 +219,20 @@ def _looks_like_openvino_model_dir(path: Path) -> bool:
     if not xml_files:
         return False
     return any(xml_file.with_suffix(".bin").exists() for xml_file in xml_files)
+
+
+def _select_japanese_language_key(generation_config) -> str | None:  # noqa: ANN001
+    lang_to_id = getattr(generation_config, "lang_to_id", {}) or {}
+    if not isinstance(lang_to_id, dict) or not lang_to_id:
+        return None
+
+    for candidate in ("<|ja|>", "ja", "japanese"):
+        if candidate in lang_to_id:
+            return candidate
+
+    for key in lang_to_id:
+        normalized = str(key).strip().lower()
+        if normalized in {"ja", "<|ja|>", "japanese"}:
+            return str(key)
+
+    return None

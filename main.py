@@ -36,7 +36,14 @@ def main() -> None:
         max_items=int(settings.get("max_history_items", 10)),
     )
 
-    model_dir = root_dir / settings.get("vosk_model_dir", "models/vosk-model-ja")
+    asr_defaults = {
+        "backend": str(settings.get("asr_backend", "vosk")),
+        "vosk_model_dir": str(settings.get("vosk_model_dir", "models/vosk-model-ja")),
+        "whisper_model_name": str(settings.get("whisper_model_name", "OpenVINO/whisper-large-v3-int8-ov")),
+        "whisper_device": str(settings.get("whisper_device", "auto")),
+        "whisper_compute_type": str(settings.get("whisper_compute_type", "int8")),
+        "whisper_download_dir": str(settings.get("whisper_download_dir", "models/whisper")),
+    }
     personal_dictionary = PersonalDictionary(
         root_dir / settings.get("personal_dictionary_file", "config/personal_dictionary.json")
     )
@@ -59,13 +66,14 @@ def main() -> None:
     try:
         build_app(
             root=root,
-            model_dir=model_dir,
             audio_config=audio_config,
             storage=storage,
             rules=rules,
             personal_dictionary=personal_dictionary,
             enable_system_wide_input_default=bool(settings.get("enable_system_wide_input", True)),
             llm_defaults=llm_defaults,
+            asr_defaults=asr_defaults,
+            root_dir=root_dir,
         )
     except FileNotFoundError as exc:
         root.withdraw()

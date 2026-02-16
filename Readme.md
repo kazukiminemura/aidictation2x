@@ -52,7 +52,7 @@ python main.py
 `config/app_settings.json` keys:
 - `asr_backend` (`vosk` | `whisper`)
 - `vosk_model_dir`
-- `whisper_model_name` (for example `large-v3`, `large-v3-turbo`, `small`, local path)
+- `whisper_model_name` (default: `OpenVINO/whisper-large-v3-int8-ov`)
 - `whisper_device` (`auto` | `cpu` | `cuda`)
 - `whisper_download_dir` (pre-download destination for Whisper models)
 
