@@ -20,7 +20,7 @@ class ProcessResult:
 
 
 def _normalize_whitespace(text: str) -> str:
-    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"[ \t\u3000]+", " ", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
 
@@ -34,12 +34,19 @@ def _append_terminal_punctuation(text: str) -> str:
 
 
 def _remove_fillers(text: str, filler_words: List[str]) -> str:
-    if not filler_words:
-        return text
-    pattern = r"|".join(re.escape(word) for word in filler_words if word)
-    if not pattern:
-        return text
-    result = re.sub(pattern, "", text)
+    result = text
+    if filler_words:
+        pattern = r"|".join(re.escape(word) for word in filler_words if word)
+        if pattern:
+            result = re.sub(pattern, "", result)
+
+    # Remove common spoken fillers that often survive ASR tokenization.
+    generic_filler = (
+        r"(?:(?<=^)|(?<=[\s、。,.!?！？]))"
+        r"(?:えー+|えっと|えーと|あの|その)"
+        r"(?:(?=[\s、。,.!?！？])|$)"
+    )
+    result = re.sub(generic_filler, "", result)
     return _normalize_whitespace(result)
 
 
@@ -56,7 +63,17 @@ def _remove_habits(text: str, habit_patterns: List[Dict[str, str]]) -> str:
 
 def _auto_edit(text: str) -> str:
     text = _normalize_whitespace(text)
+    text = _tighten_japanese_spacing(text)
     text = _append_terminal_punctuation(text)
+    return text
+
+
+def _tighten_japanese_spacing(text: str) -> str:
+    # Keep Latin-word spacing, but remove unnatural spaces around Japanese text.
+    text = re.sub(r"\s+([、。．！？!?])", r"\1", text)
+    text = re.sub(r"([（(「『【])\s+", r"\1", text)
+    text = re.sub(r"\s+([）)」』】])", r"\1", text)
+    text = re.sub(r"(?<=[ぁ-んァ-ヶ一-龠々ー])\s+(?=[ぁ-んァ-ヶ一-龠々ー])", "", text)
     return text
 
 
