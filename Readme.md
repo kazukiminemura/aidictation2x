@@ -1,12 +1,12 @@
 ﻿# AI Dictation 2x (ASR + OpenVINO LLM)
 
-This app records microphone audio, runs local ASR (Vosk), applies text cleanup rules,
+This app records microphone audio, runs local ASR (Vosk / Whisper), applies text cleanup rules,
 and then post-edits text with a local OpenVINO LLM backend.
 
 ## Features
 - Push-to-talk recording (`Ctrl+Space`)
 - Optional system-wide paste (`Ctrl+Shift+Space`)
-- Local ASR (Vosk)
+- Local ASR (Vosk / Whisper)
 - Rule-based cleanup (fillers, habits, punctuation)
 - Personal dictionary (reading -> surface)
 - Local OpenVINO LLM post-edit with quality gate and fallback
@@ -47,6 +47,18 @@ python main.py
 - `llm_device` (`GPU` recommended, `CPU` fallback)
 - `llm_auto_download` (`true` | `false`, default `false`)
 - `llm_download_dir` (local cache/download folder)
+
+## ASR settings
+`config/app_settings.json` keys:
+- `asr_backend` (`vosk` | `whisper`)
+- `vosk_model_dir`
+- `whisper_model_name` (for example `large-v3`, `large-v3-turbo`, `small`, local path)
+- `whisper_device` (`auto` | `cpu` | `cuda`)
+- `whisper_download_dir` (pre-download destination for Whisper models)
+
+You can also switch ASR backend/model from `Properties...` in the app.
+Use `Download ASR Model (Whisper)` in `Properties...` to pre-download before recording.
+Whisper ASR uses OpenVINO (`openvino_genai.WhisperPipeline`) and expects an OpenVINO-converted model directory.
 
 ## UI options
 - Right-click anywhere in the main window and open `Properties...`
