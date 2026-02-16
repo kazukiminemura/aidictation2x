@@ -6,6 +6,7 @@ from tkinter import messagebox
 
 from .asr import ASREngine
 from .audio_capture import AudioConfig, AudioRecorder
+from .business_email import to_business_email
 from .llm_post_editor import LLMOptions, LLMPostEditor
 from .personal_dictionary import PersonalDictionary
 from .storage import Storage
@@ -39,10 +40,13 @@ class VoiceInputApp:
         self.auto_edit_var = tk.BooleanVar(value=True)
         self.remove_fillers_var = tk.BooleanVar(value=True)
         self.remove_habits_var = tk.BooleanVar(value=True)
+        self.business_email_var = tk.BooleanVar(value=False)
         self.system_wide_input_var = tk.BooleanVar(value=enable_system_wide_input_default)
         self.status_var = tk.StringVar(value="Starting...")
         self.current_raw_text = ""
         self.hotkey_pressed = False
+        self.llm_enabled_var = tk.BooleanVar(value=bool(self.llm_defaults.get("enabled", True)))
+        self.properties_window: tk.Toplevel | None = None
 
         self.system_wide_input = SystemWideInput(
             dispatch_on_ui=lambda cb: self.root.after(0, cb),
@@ -51,6 +55,7 @@ class VoiceInputApp:
 
         self._build_ui()
         self._bind_hotkeys()
+        self._bind_context_menu()
         self._load_initial_state()
         self._refresh_dictionary_list()
 
@@ -106,54 +111,16 @@ class VoiceInputApp:
         )
         self.record_button.pack(side=tk.LEFT)
 
-        tk.Checkbutton(
+        tk.Label(
             controls,
-            text="Auto edit",
-            variable=self.auto_edit_var,
+            text="Right-click to open Properties",
             bg="#0a0e14",
-            fg="#c9d1d9",
-            activebackground="#0a0e14",
-            activeforeground="#c9d1d9",
-            selectcolor="#141b26",
+            fg="#8b9fb6",
             font=("Consolas", 9),
         ).pack(side=tk.LEFT, padx=(12, 4))
-        tk.Checkbutton(
-            controls,
-            text="Remove fillers",
-            variable=self.remove_fillers_var,
-            bg="#0a0e14",
-            fg="#c9d1d9",
-            activebackground="#0a0e14",
-            activeforeground="#c9d1d9",
-            selectcolor="#141b26",
-            font=("Consolas", 9),
-        ).pack(side=tk.LEFT, padx=4)
-        tk.Checkbutton(
-            controls,
-            text="Remove habits",
-            variable=self.remove_habits_var,
-            bg="#0a0e14",
-            fg="#c9d1d9",
-            activebackground="#0a0e14",
-            activeforeground="#c9d1d9",
-            selectcolor="#141b26",
-            font=("Consolas", 9),
-        ).pack(side=tk.LEFT, padx=4)
 
         system_frame = tk.Frame(container, bg="#0a0e14")
         system_frame.pack(fill=tk.X, pady=(0, 8))
-        tk.Checkbutton(
-            system_frame,
-            text="System-wide input (paste to active app on completion)",
-            variable=self.system_wide_input_var,
-            command=self._toggle_system_wide_input,
-            bg="#0a0e14",
-            fg="#c9d1d9",
-            activebackground="#0a0e14",
-            activeforeground="#c9d1d9",
-            selectcolor="#141b26",
-            font=("Consolas", 9),
-        ).pack(anchor=tk.W)
         tk.Label(
             system_frame,
             text="Global hotkey: Ctrl+Shift+Space",
@@ -261,6 +228,93 @@ class VoiceInputApp:
         self.root.bind_all("<Control-KeyPress-space>", self._on_hotkey_press)
         self.root.bind_all("<Control-KeyRelease-space>", self._on_hotkey_release)
 
+    def _bind_context_menu(self) -> None:
+        self.context_menu = tk.Menu(self.root, tearoff=0)
+        self.context_menu.add_command(label="Properties...", command=self._open_properties_dialog)
+        self.root.bind("<Button-3>", self._show_context_menu)
+        self.root.bind("<Control-Button-1>", self._show_context_menu)
+
+    def _show_context_menu(self, event):  # noqa: ANN001
+        try:
+            self.context_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.context_menu.grab_release()
+
+    def _open_properties_dialog(self) -> None:
+        if self.properties_window is not None and self.properties_window.winfo_exists():
+            self.properties_window.focus_force()
+            return
+
+        win = tk.Toplevel(self.root)
+        win.title("Properties")
+        win.geometry("360x280")
+        win.resizable(False, False)
+        win.transient(self.root)
+        self.properties_window = win
+
+        auto_edit_var = tk.BooleanVar(value=self.auto_edit_var.get())
+        remove_fillers_var = tk.BooleanVar(value=self.remove_fillers_var.get())
+        remove_habits_var = tk.BooleanVar(value=self.remove_habits_var.get())
+        business_email_var = tk.BooleanVar(value=self.business_email_var.get())
+        system_wide_var = tk.BooleanVar(value=self.system_wide_input_var.get())
+        llm_enabled_var = tk.BooleanVar(value=self.llm_enabled_var.get())
+
+        frame = tk.Frame(win, padx=12, pady=12)
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        tk.Checkbutton(frame, text="Auto edit", variable=auto_edit_var).pack(anchor=tk.W, pady=4)
+        tk.Checkbutton(frame, text="Remove fillers", variable=remove_fillers_var).pack(anchor=tk.W, pady=4)
+        tk.Checkbutton(frame, text="Remove habits", variable=remove_habits_var).pack(anchor=tk.W, pady=4)
+        tk.Checkbutton(frame, text="Convert to business email", variable=business_email_var).pack(anchor=tk.W, pady=4)
+        tk.Checkbutton(frame, text="Enable LLM correction", variable=llm_enabled_var).pack(anchor=tk.W, pady=4)
+        tk.Checkbutton(
+            frame,
+            text="System-wide input (paste to active app on completion)",
+            variable=system_wide_var,
+        ).pack(anchor=tk.W, pady=4)
+        tk.Button(
+            frame,
+            text="Download LLM Model",
+            command=self._download_model_clicked,
+            bg="#2ea043",
+            fg="#ffffff",
+            activebackground="#3fb950",
+            activeforeground="#ffffff",
+            relief=tk.FLAT,
+            padx=10,
+            pady=4,
+            font=("Consolas", 9, "bold"),
+            cursor="hand2",
+        ).pack(anchor=tk.W, pady=(10, 0))
+
+        def apply_and_close() -> None:
+            self.auto_edit_var.set(auto_edit_var.get())
+            self.remove_fillers_var.set(remove_fillers_var.get())
+            self.remove_habits_var.set(remove_habits_var.get())
+            self.business_email_var.set(business_email_var.get())
+            self.llm_enabled_var.set(llm_enabled_var.get())
+            self.llm_defaults["enabled"] = bool(llm_enabled_var.get())
+
+            before = self.system_wide_input_var.get()
+            after = system_wide_var.get()
+            self.system_wide_input_var.set(after)
+            if before != after:
+                self._toggle_system_wide_input()
+            self.status_var.set("Properties updated")
+            self.properties_window = None
+            win.destroy()
+
+        buttons = tk.Frame(frame)
+        buttons.pack(fill=tk.X, pady=(16, 0))
+        tk.Button(buttons, text="Apply", command=apply_and_close, width=10).pack(side=tk.LEFT)
+        tk.Button(buttons, text="Cancel", command=win.destroy, width=10).pack(side=tk.RIGHT)
+
+        def on_close() -> None:
+            self.properties_window = None
+            win.destroy()
+
+        win.protocol("WM_DELETE_WINDOW", on_close)
+
     def _on_hotkey_press(self, event):  # noqa: ANN001
         if event.state & 0x0001:
             return
@@ -281,6 +335,26 @@ class VoiceInputApp:
         else:
             self.system_wide_input.stop()
             self.status_var.set("System-wide input: OFF")
+
+    def _download_model_clicked(self) -> None:
+        self.status_var.set("Downloading LLM model...")
+        threading.Thread(target=self._download_model_worker, daemon=True).start()
+
+    def _download_model_worker(self) -> None:
+        try:
+            model_path = self.llm_editor.download_model()
+            self.root.after(0, self._on_download_model_done, model_path, "")
+        except Exception as exc:  # noqa: BLE001
+            self.logger.exception("Model download failed")
+            self.root.after(0, self._on_download_model_done, "", str(exc))
+
+    def _on_download_model_done(self, model_path: str, error: str) -> None:
+        if error:
+            self.status_var.set("Model download failed")
+            messagebox.showerror("LLM model download error", error)
+            return
+        self.status_var.set("LLM model ready")
+        messagebox.showinfo("LLM model", f"Model is ready at:\n{model_path}")
 
     def _refresh_dictionary_list(self) -> None:
         self.dict_entries = self.personal_dictionary.list_entries()
@@ -354,7 +428,7 @@ class VoiceInputApp:
                 raw_text=raw_asr,
                 preprocessed_text=process_result.final_text,
                 options=LLMOptions(
-                    enabled=bool(self.llm_defaults.get("enabled", True)),
+                    enabled=bool(self.llm_enabled_var.get()),
                     strength=str(self.llm_defaults.get("strength", "medium")),
                     max_input_chars=int(self.llm_defaults.get("max_input_chars", 1200)),
                     max_change_ratio=float(self.llm_defaults.get("max_change_ratio", 0.35)),
@@ -363,6 +437,8 @@ class VoiceInputApp:
             )
 
             final = llm_result.final_text
+            if self.business_email_var.get():
+                final = to_business_email(final)
             self.storage.save_autosave(
                 raw,
                 final,
@@ -433,6 +509,8 @@ def build_app(
         timeout_ms=int(llm_defaults.get("timeout_ms", 8000)),
         blocked_patterns=list(llm_defaults.get("blocked_patterns", [])),
         llm_device=str(llm_defaults.get("device", "CPU")),
+        auto_download=bool(llm_defaults.get("auto_download", False)),
+        download_dir=Path(str(llm_defaults.get("download_dir", "models/openvino"))),
     )
     return VoiceInputApp(
         root=root,

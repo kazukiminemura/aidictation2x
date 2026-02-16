@@ -36,13 +36,22 @@ class LLMBackend(Protocol):
 
 
 class OpenVINOBackend:
-    """Local OpenVINO GenAI backend (Qwen OpenVINO model)."""
+    """Local OpenVINO GenAI backend with optional auto-download from Hugging Face."""
 
-    def __init__(self, model_ref: str, device: str = "CPU"):
+    def __init__(
+        self,
+        model_ref: str,
+        device: str = "CPU",
+        auto_download: bool = True,
+        download_dir: Path | None = None,
+    ):
         self.model_ref = model_ref
         self.device = device
+        self.auto_download = auto_download
+        self.download_dir = download_dir or Path("models") / "openvino"
         self._pipeline: Any | None = None
         self._genai: Any | None = None
+        self._resolved_model_path: str | None = None
 
     def _ensure_pipeline(self) -> None:
         if self._pipeline is not None:
@@ -54,7 +63,52 @@ class OpenVINOBackend:
             raise RuntimeError("openvino_genai_not_installed") from exc
 
         self._genai = ov_genai
-        self._pipeline = ov_genai.LLMPipeline(self.model_ref, self.device)
+        model_source = self._resolve_model_source()
+        self._pipeline = ov_genai.LLMPipeline(model_source, self.device)
+
+    def _resolve_model_source(self, force_download: bool = False) -> str:
+        if self._resolved_model_path is not None:
+            return self._resolved_model_path
+
+        model_path = Path(self.model_ref)
+        if model_path.exists():
+            self._resolved_model_path = str(model_path)
+            return self._resolved_model_path
+
+        repo_id = _normalize_repo_id(self.model_ref)
+
+        if not _is_openvino_model_ref(repo_id):
+            self._resolved_model_path = self.model_ref
+            return self._resolved_model_path
+
+        if not self.auto_download and not force_download:
+            raise RuntimeError("model_not_found_and_auto_download_disabled")
+
+        self.download_dir.mkdir(parents=True, exist_ok=True)
+        target_dir = self.download_dir / repo_id.replace("/", "--")
+        if _looks_like_model_dir(target_dir):
+            self._resolved_model_path = str(target_dir)
+            return self._resolved_model_path
+
+        try:
+            from huggingface_hub import snapshot_download
+        except ImportError as exc:
+            raise RuntimeError("huggingface_hub_not_installed") from exc
+
+        snapshot_download(
+            repo_id=repo_id,
+            local_dir=str(target_dir),
+            local_dir_use_symlinks=False,
+        )
+
+        if not _looks_like_model_dir(target_dir):
+            raise RuntimeError("model_download_failed")
+
+        self._resolved_model_path = str(target_dir)
+        return self._resolved_model_path
+
+    def download_model(self) -> str:
+        return self._resolve_model_source(force_download=True)
 
     def generate(self, text: str, options: LLMOptions, timeout_ms: int) -> str:
         self._ensure_pipeline()
@@ -63,7 +117,6 @@ class OpenVINOBackend:
         prompt = _build_prompt(text=text, options=options)
         max_new_tokens = _estimate_max_new_tokens(text)
 
-        # Try canonical GenerationConfig first; fall back to kwargs for API compatibility.
         output_text: str | None = None
         try:
             gen_cfg = self._genai.GenerationConfig()
@@ -144,13 +197,24 @@ class LLMPostEditor:
         blocked_patterns: list[str] | None = None,
         backend: LLMBackend | None = None,
         llm_device: str = "CPU",
+        auto_download: bool = True,
+        download_dir: Path | None = None,
     ):
         self.model_path = model_path
         self.timeout_ms = timeout_ms
         self.llm_device = llm_device
+        self.auto_download = auto_download
+        self.download_dir = download_dir or Path("models") / "openvino"
         self.logger = logging.getLogger(__name__)
         self.quality_gate = QualityGate(blocked_patterns or [])
         self.backend = backend or self._resolve_backend(model_path)
+
+    def download_model(self) -> str:
+        if self.backend is None:
+            raise RuntimeError("backend_unavailable")
+        if not hasattr(self.backend, "download_model"):
+            raise RuntimeError("download_not_supported_for_backend")
+        return str(self.backend.download_model())
 
     def refine(self, raw_text: str, preprocessed_text: str, options: LLMOptions) -> LLMResult:
         _ = raw_text
@@ -171,6 +235,20 @@ class LLMPostEditor:
             candidate = "".join(refined_chunks).strip()
         except subprocess.TimeoutExpired:
             return self._build_result(preprocessed_text, False, "timeout", [], started)
+        except RuntimeError as exc:
+            reason = str(exc).strip() or "llm_runtime_error"
+            if reason in {
+                "model_not_found_and_auto_download_disabled",
+                "openvino_genai_not_installed",
+                "huggingface_hub_not_installed",
+                "model_download_failed",
+                "download_not_supported_for_backend",
+            }:
+                # Treat expected environment/model readiness issues as graceful fallback.
+                self.logger.warning("LLM skipped: %s", reason)
+                return self._build_result(preprocessed_text, False, reason, [], started)
+            self.logger.exception("LLM runtime error")
+            return self._build_result(preprocessed_text, False, "llm_error", [], started)
         except Exception:  # noqa: BLE001
             self.logger.exception("LLM refinement failed")
             return self._build_result(preprocessed_text, False, "llm_error", [], started)
@@ -185,9 +263,13 @@ class LLMPostEditor:
     def _resolve_backend(self, model_path: Path) -> LLMBackend | None:
         model_ref = str(model_path)
 
-        # Explicit OpenVINO model id/path support (e.g. OpenVINO/Qwen3-8B-int4-cw-ov)
         if _is_openvino_model_ref(model_ref):
-            return OpenVINOBackend(model_ref=model_ref, device=self.llm_device)
+            return OpenVINOBackend(
+                model_ref=model_ref,
+                device=self.llm_device,
+                auto_download=self.auto_download,
+                download_dir=self.download_dir,
+            )
 
         if model_path.is_file() and model_path.suffix.lower() == ".json":
             return RuleFileBackend(model_path)
@@ -196,9 +278,13 @@ class LLMPostEditor:
         if model_path.is_dir() and rules_file.exists():
             return RuleFileBackend(rules_file)
 
-        # If the path points to a local directory without rules.json, try OpenVINO model loading.
         if model_path.exists() and model_path.is_dir():
-            return OpenVINOBackend(model_ref=model_ref, device=self.llm_device)
+            return OpenVINOBackend(
+                model_ref=model_ref,
+                device=self.llm_device,
+                auto_download=self.auto_download,
+                download_dir=self.download_dir,
+            )
 
         if shutil.which("ollama"):
             return OllamaBackend(model_ref=model_ref)
@@ -251,8 +337,13 @@ class LLMPostEditor:
 
 
 def _is_openvino_model_ref(model_ref: str) -> bool:
-    normalized = model_ref.replace("\\", "/")
+    normalized = _normalize_repo_id(model_ref)
     return normalized.startswith("OpenVINO/")
+
+
+def _normalize_repo_id(model_ref: str) -> str:
+    # Allow values copied with quotes and normalize Windows separators.
+    return model_ref.strip().strip("'\"").replace("\\", "/")
 
 
 def _coerce_generation_output(output: Any) -> str:
@@ -291,7 +382,6 @@ def _post_process_model_output(output: str, prompt: str) -> str:
 
 
 def _estimate_max_new_tokens(text: str) -> int:
-    # Enough room for small corrections, not for rewriting entire content.
     return max(64, min(512, int(len(text) * 0.8)))
 
 
@@ -306,3 +396,11 @@ def _normalize_for_strong(text: str) -> str:
     text = text.replace("  ", " ")
     text = text.replace(" ,", "、")
     return text
+
+
+def _looks_like_model_dir(path: Path) -> bool:
+    if not path.exists() or not path.is_dir():
+        return False
+    xml_files = list(path.glob("*.xml"))
+    bin_files = list(path.glob("*.bin"))
+    return bool(xml_files and bin_files)

@@ -51,6 +51,8 @@ def main() -> None:
         "timeout_ms": int(settings.get("llm_timeout_ms", 8000)),
         "blocked_patterns": list(settings.get("llm_blocked_patterns", [])),
         "device": str(settings.get("llm_device", "CPU")),
+        "auto_download": bool(settings.get("llm_auto_download", False)),
+        "download_dir": str(settings.get("llm_download_dir", "models/openvino")),
     }
 
     root = tk.Tk()

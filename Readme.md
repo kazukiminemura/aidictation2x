@@ -10,6 +10,7 @@ and then post-edits text with a local OpenVINO LLM backend.
 - Rule-based cleanup (fillers, habits, punctuation)
 - Personal dictionary (reading -> surface)
 - Local OpenVINO LLM post-edit with quality gate and fallback
+- Optional conversion to business email format
 - History/autosave with LLM metadata
 
 ## Setup
@@ -22,9 +23,11 @@ pip install -r requirements.txt
 - `models/vosk-model-ja`
 - expected file example: `models/vosk-model-ja/am/final.mdl`
 
-3. Ensure OpenVINO model is available as:
-- `OpenVINO/Qwen3-8B-int4-cw-ov` (HF/OpenVINO model id)
-- or set `llm_model_path` in `config/app_settings.json` to your local OpenVINO model directory
+3. OpenVINO model handling:
+- Default `llm_model_path` is `OpenVINO/Qwen3-8B-int4-cw-ov`
+- Use the **Download LLM Model** button in the app to download from Hugging Face
+- Download target defaults to `models/openvino`
+- You can also set `llm_model_path` to a local OpenVINO model directory
 
 4. Run
 ```bash
@@ -42,6 +45,16 @@ python main.py
 - `llm_timeout_ms`
 - `llm_blocked_patterns`
 - `llm_device` (`CPU`, etc.)
+- `llm_auto_download` (`true` | `false`, default `false`)
+- `llm_download_dir` (local cache/download folder)
+
+## UI options
+- Right-click anywhere in the main window and open `Properties...`
+- You can toggle:
+  - Auto edit / Remove fillers / Remove habits
+  - Enable LLM correction
+  - System-wide input
+  - Convert to business email
 
 ## Tests
 ```bash
