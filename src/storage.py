@@ -1,5 +1,5 @@
-﻿import json
-from dataclasses import asdict, dataclass
+import json
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import List
@@ -13,6 +13,8 @@ class HistoryItem:
     llm_applied: bool = False
     llm_latency_ms: int = 0
     fallback_reason: str = ""
+    processing_total_ms: int = 0
+    processing_breakdown_ms: dict[str, int] = field(default_factory=dict)
 
 
 class Storage:
@@ -30,7 +32,10 @@ class Storage:
         llm_applied: bool = False,
         llm_latency_ms: int = 0,
         fallback_reason: str = "",
+        processing_total_ms: int = 0,
+        processing_breakdown_ms: dict[str, int] | None = None,
     ) -> None:
+        breakdown = processing_breakdown_ms or {}
         payload = asdict(
             HistoryItem(
                 timestamp=datetime.now().isoformat(timespec="seconds"),
@@ -39,6 +44,8 @@ class Storage:
                 llm_applied=llm_applied,
                 llm_latency_ms=llm_latency_ms,
                 fallback_reason=fallback_reason,
+                processing_total_ms=processing_total_ms,
+                processing_breakdown_ms=breakdown,
             )
         )
         with self.autosave_file.open("w", encoding="utf-8") as fp:
@@ -58,7 +65,10 @@ class Storage:
         llm_applied: bool = False,
         llm_latency_ms: int = 0,
         fallback_reason: str = "",
+        processing_total_ms: int = 0,
+        processing_breakdown_ms: dict[str, int] | None = None,
     ) -> None:
+        breakdown = processing_breakdown_ms or {}
         current = self.load_history()
         current.insert(
             0,
@@ -69,6 +79,8 @@ class Storage:
                 llm_applied=llm_applied,
                 llm_latency_ms=llm_latency_ms,
                 fallback_reason=fallback_reason,
+                processing_total_ms=processing_total_ms,
+                processing_breakdown_ms=breakdown,
             ),
         )
         current = current[: self.max_items]
@@ -85,6 +97,12 @@ class Storage:
 
     @staticmethod
     def _to_history_item(payload: dict) -> HistoryItem:
+        raw_breakdown = payload.get("processing_breakdown_ms", {})
+        breakdown: dict[str, int] = {}
+        if isinstance(raw_breakdown, dict):
+            for key, value in raw_breakdown.items():
+                breakdown[str(key)] = int(value)
+
         return HistoryItem(
             timestamp=payload.get("timestamp", ""),
             raw_text=payload.get("raw_text", ""),
@@ -92,4 +110,6 @@ class Storage:
             llm_applied=bool(payload.get("llm_applied", False)),
             llm_latency_ms=int(payload.get("llm_latency_ms", 0)),
             fallback_reason=str(payload.get("fallback_reason", "")),
+            processing_total_ms=int(payload.get("processing_total_ms", 0)),
+            processing_breakdown_ms=breakdown,
         )

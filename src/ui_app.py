@@ -1,6 +1,7 @@
 ﻿import logging
 import threading
 import tkinter as tk
+import time
 from pathlib import Path
 from tkinter import messagebox
 
@@ -411,9 +412,18 @@ class VoiceInputApp:
         threading.Thread(target=self._transcribe_and_process, args=(audio,), daemon=True).start()
 
     def _transcribe_and_process(self, audio_data) -> None:  # noqa: ANN001
+        pipeline_started = time.perf_counter()
+        timings: dict[str, int] = {}
         try:
+            started = time.perf_counter()
             raw_asr = self.asr_engine.transcribe(audio_data)
+            timings["asr"] = int((time.perf_counter() - started) * 1000)
+
+            started = time.perf_counter()
             raw = self.personal_dictionary.apply(raw_asr)
+            timings["dictionary"] = int((time.perf_counter() - started) * 1000)
+
+            started = time.perf_counter()
             process_result = process_text(
                 raw,
                 self.rules,
@@ -423,7 +433,9 @@ class VoiceInputApp:
                     remove_habits=self.remove_habits_var.get(),
                 ),
             )
+            timings["rules"] = int((time.perf_counter() - started) * 1000)
 
+            started = time.perf_counter()
             llm_result = self.llm_editor.refine(
                 raw_text=raw_asr,
                 preprocessed_text=process_result.final_text,
@@ -435,16 +447,26 @@ class VoiceInputApp:
                     domain_hint=str(self.llm_defaults.get("domain_hint", "")),
                 ),
             )
+            timings["llm"] = int((time.perf_counter() - started) * 1000)
 
             final = llm_result.final_text
             if self.business_email_var.get():
+                started = time.perf_counter()
                 final = to_business_email(final)
+                timings["business_email"] = int((time.perf_counter() - started) * 1000)
+
+            total_ms = int((time.perf_counter() - pipeline_started) * 1000)
+            timings["total"] = total_ms
+
+            started = time.perf_counter()
             self.storage.save_autosave(
                 raw,
                 final,
                 llm_applied=llm_result.applied,
                 llm_latency_ms=llm_result.latency_ms,
                 fallback_reason=llm_result.fallback_reason,
+                processing_total_ms=total_ms,
+                processing_breakdown_ms=timings,
             )
             self.storage.append_history(
                 raw,
@@ -452,35 +474,48 @@ class VoiceInputApp:
                 llm_applied=llm_result.applied,
                 llm_latency_ms=llm_result.latency_ms,
                 fallback_reason=llm_result.fallback_reason,
+                processing_total_ms=total_ms,
+                processing_breakdown_ms=timings,
             )
-            self.root.after(0, self._apply_results, raw, final, "", llm_result.fallback_reason)
+            timings["storage"] = int((time.perf_counter() - started) * 1000)
+
+            self.logger.info("Pipeline timings (ms): %s", timings)
+            self.root.after(0, self._apply_results, raw, final, "", llm_result.fallback_reason, timings)
         except Exception as exc:  # noqa: BLE001
             self.logger.exception("Pipeline failed")
-            self.root.after(0, self._apply_results, "", "", str(exc), "")
+            self.root.after(0, self._apply_results, "", "", str(exc), "", timings)
 
-    def _apply_results(self, raw: str, final: str, error: str, fallback_reason: str = "") -> None:
+    def _apply_results(
+        self,
+        raw: str,
+        final: str,
+        error: str,
+        fallback_reason: str = "",
+        timings: dict[str, int] | None = None,
+    ) -> None:
         if error:
             self.status_var.set("Error")
             messagebox.showerror("Processing error", error)
             return
 
+        timing_suffix = self._format_timing_suffix(timings)
         self._set_text(self.final_text, final)
         self.current_raw_text = raw
         if self.system_wide_input_var.get():
             try:
                 self.system_wide_input.paste_to_active_app(final)
                 if fallback_reason and fallback_reason not in {"", "disabled"}:
-                    self.status_var.set(f"Done (fallback: {fallback_reason})")
+                    self.status_var.set(f"Done (fallback: {fallback_reason}){timing_suffix}")
                 else:
-                    self.status_var.set("Done (pasted to active app)")
+                    self.status_var.set(f"Done (pasted to active app){timing_suffix}")
             except Exception as exc:  # noqa: BLE001
-                self.status_var.set("Done (paste failed)")
+                self.status_var.set(f"Done (paste failed){timing_suffix}")
                 messagebox.showwarning("Paste failed", str(exc))
         else:
             if fallback_reason and fallback_reason not in {"", "disabled"}:
-                self.status_var.set(f"Done (fallback: {fallback_reason})")
+                self.status_var.set(f"Done (fallback: {fallback_reason}){timing_suffix}")
             else:
-                self.status_var.set("Done")
+                self.status_var.set(f"Done{timing_suffix}")
 
     def _on_close(self) -> None:
         self.system_wide_input.stop()
@@ -490,6 +525,22 @@ class VoiceInputApp:
     def _set_text(widget: tk.Text, text: str) -> None:
         widget.delete("1.0", tk.END)
         widget.insert("1.0", text)
+
+    @staticmethod
+    def _format_timing_suffix(timings: dict[str, int] | None) -> str:
+        if not timings:
+            return ""
+
+        ordered_keys = ["total", "asr", "rules", "llm", "storage"]
+        labels = {
+            "total": "total",
+            "asr": "asr",
+            "rules": "rules",
+            "llm": "llm",
+            "storage": "save",
+        }
+        parts = [f"{labels[key]} {timings[key]}ms" for key in ordered_keys if key in timings]
+        return f" [{', '.join(parts)}]" if parts else ""
 
 
 def build_app(
