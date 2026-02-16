@@ -44,7 +44,7 @@ python main.py
 - `llm_domain_hint`
 - `llm_timeout_ms`
 - `llm_blocked_patterns`
-- `llm_device` (`CPU`, etc.)
+- `llm_device` (`GPU` recommended, `CPU` fallback)
 - `llm_auto_download` (`true` | `false`, default `false`)
 - `llm_download_dir` (local cache/download folder)
 

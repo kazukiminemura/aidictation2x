@@ -81,14 +81,14 @@ class OpenVINOBackend:
             self._resolved_model_path = self.model_ref
             return self._resolved_model_path
 
-        if not self.auto_download and not force_download:
-            raise RuntimeError("model_not_found_and_auto_download_disabled")
-
         self.download_dir.mkdir(parents=True, exist_ok=True)
         target_dir = self.download_dir / repo_id.replace("/", "--")
         if _looks_like_model_dir(target_dir):
             self._resolved_model_path = str(target_dir)
             return self._resolved_model_path
+
+        if not self.auto_download and not force_download:
+            raise RuntimeError("model_not_found_and_auto_download_disabled")
 
         try:
             from huggingface_hub import snapshot_download
@@ -196,7 +196,7 @@ class LLMPostEditor:
         timeout_ms: int = 8000,
         blocked_patterns: list[str] | None = None,
         backend: LLMBackend | None = None,
-        llm_device: str = "CPU",
+        llm_device: str = "GPU",
         auto_download: bool = True,
         download_dir: Path | None = None,
     ):
@@ -401,6 +401,11 @@ def _normalize_for_strong(text: str) -> str:
 def _looks_like_model_dir(path: Path) -> bool:
     if not path.exists() or not path.is_dir():
         return False
-    xml_files = list(path.glob("*.xml"))
-    bin_files = list(path.glob("*.bin"))
-    return bool(xml_files and bin_files)
+    # Accept both flat and nested OpenVINO exports.
+    xml_files = list(path.rglob("*.xml"))
+    if not xml_files:
+        return False
+    for xml_file in xml_files:
+        if xml_file.with_suffix(".bin").exists():
+            return True
+    return False

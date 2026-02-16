@@ -508,7 +508,7 @@ def build_app(
         model_path=Path(str(llm_defaults.get("model_path", "OpenVINO/Qwen3-8B-int4-cw-ov"))),
         timeout_ms=int(llm_defaults.get("timeout_ms", 8000)),
         blocked_patterns=list(llm_defaults.get("blocked_patterns", [])),
-        llm_device=str(llm_defaults.get("device", "CPU")),
+        llm_device=str(llm_defaults.get("device", "GPU")),
         auto_download=bool(llm_defaults.get("auto_download", False)),
         download_dir=Path(str(llm_defaults.get("download_dir", "models/openvino"))),
     )
