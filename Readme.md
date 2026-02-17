@@ -12,6 +12,7 @@ and then post-edits text with a local OpenVINO LLM backend.
 - Local OpenVINO LLM post-edit with quality gate and fallback
 - Optional conversion to business email format
 - History/autosave with LLM metadata
+- Autonomous agent mode (internal local run / external API run)
 
 ## Setup
 1. Install dependencies
@@ -86,6 +87,17 @@ Whisper ASR uses OpenVINO (`openvino_genai.WhisperPipeline`) and expects an Open
   - Enable LLM correction
   - System-wide input
   - Convert to business email
+  - Autonomous agent mode (`internal` / `external_api`)
+
+## Autonomous agent
+- Open the `AI Agent` tab and input a goal, then click `Run Agent`
+- `internal` mode:
+  - Decomposes goals into tasks
+  - Retries failed steps and applies fallback repair when possible
+  - Creates execution report under `data/agent_runs/<timestamp>/agent_report.md`
+- `external_api` mode:
+  - Sends goal/workspace info to `autonomous_agent_external_url`
+  - Displays parsed step results and raw response
 
 ## Tests
 ```bash

@@ -214,6 +214,10 @@ def main() -> None:
         "external_agent_url": str(
             settings.get("external_agent_url", "http://127.0.0.1:8000/v1/agent/chat")
         ),
+        "autonomous_agent_mode": str(settings.get("autonomous_agent_mode", "internal")),
+        "autonomous_agent_external_url": str(
+            settings.get("autonomous_agent_external_url", "http://127.0.0.1:8000/v1/agent/run")
+        ),
     }
 
     root = tk.Tk()

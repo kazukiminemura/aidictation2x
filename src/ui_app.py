@@ -7,6 +7,7 @@ from tkinter import messagebox
 from tkinter import ttk
 
 from .asr import ASREngine
+from .autonomous_agent import AutonomousAgentResult, ExternalAPIAutonomousAgent, InternalAutonomousAgent
 from .audio_capture import AudioConfig, AudioRecorder
 from .business_email import to_business_email
 from .llm_post_editor import LLMOptions, LLMPostEditor
@@ -68,6 +69,15 @@ class VoiceInputApp:
         self.properties_window: tk.Toplevel | None = None
         self.agent_response_text: tk.Text | None = None
         self.rest_response_text: tk.Text | None = None
+        self.agent_goal_var = tk.StringVar(value="")
+        self.agent_run_button: tk.Button | None = None
+        self._agent_running = False
+        self.autonomous_agent_mode_var = tk.StringVar(
+            value=str(self.llm_defaults.get("autonomous_agent_mode", "internal"))
+        )
+        self.autonomous_agent_external_url_var = tk.StringVar(
+            value=str(self.llm_defaults.get("autonomous_agent_external_url", "http://127.0.0.1:8000/v1/agent/run"))
+        )
         self.asr_text: tk.Text | None = None
         self.dict_reading_entry: tk.Entry | None = None
         self.dict_surface_entry: tk.Entry | None = None
@@ -246,6 +256,40 @@ class VoiceInputApp:
         )
         self.final_text.pack(fill=tk.BOTH, expand=True)
 
+        agent_controls = tk.Frame(agent_tab, bg="#0a0e14")
+        agent_controls.pack(fill=tk.X, pady=(0, 6))
+        tk.Label(
+            agent_controls,
+            text="Goal",
+            fg="#8b9fb6",
+            bg="#0a0e14",
+            font=("Consolas", 9, "bold"),
+        ).pack(side=tk.LEFT, padx=(0, 6))
+        tk.Entry(
+            agent_controls,
+            textvariable=self.agent_goal_var,
+            bg="#0b111a",
+            fg="#dbe6f3",
+            insertbackground="#dbe6f3",
+            relief=tk.FLAT,
+            font=("Consolas", 9),
+        ).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
+        self.agent_run_button = tk.Button(
+            agent_controls,
+            text="Run Agent",
+            command=self._run_autonomous_agent_clicked,
+            bg="#7c2d12",
+            fg="#ffffff",
+            activebackground="#9a3412",
+            activeforeground="#ffffff",
+            relief=tk.FLAT,
+            padx=10,
+            pady=4,
+            font=("Consolas", 9, "bold"),
+            cursor="hand2",
+        )
+        self.agent_run_button.pack(side=tk.LEFT)
+
         self.agent_response_text = tk.Text(
             agent_tab,
             height=18,
@@ -315,6 +359,8 @@ class VoiceInputApp:
         llm_enabled_var = tk.BooleanVar(value=self.llm_enabled_var.get())
         external_agent_enabled_var = tk.BooleanVar(value=self.external_agent_enabled_var.get())
         external_agent_url_var = tk.StringVar(value=self.external_agent_url_var.get())
+        autonomous_agent_mode_var = tk.StringVar(value=self.autonomous_agent_mode_var.get())
+        autonomous_agent_external_url_var = tk.StringVar(value=self.autonomous_agent_external_url_var.get())
         whisper_model_name_var = tk.StringVar(value=self.whisper_model_name_var.get())
         whisper_device_var = tk.StringVar(value=self.whisper_device_var.get())
         whisper_compute_type_var = tk.StringVar(value=self.whisper_compute_type_var.get())
@@ -332,6 +378,10 @@ class VoiceInputApp:
         )
         tk.Label(frame, text="External agent URL").pack(anchor=tk.W, pady=(8, 0))
         tk.Entry(frame, textvariable=external_agent_url_var).pack(anchor=tk.W, fill=tk.X)
+        tk.Label(frame, text="Autonomous agent mode").pack(anchor=tk.W, pady=(8, 0))
+        tk.OptionMenu(frame, autonomous_agent_mode_var, "internal", "external_api").pack(anchor=tk.W, fill=tk.X)
+        tk.Label(frame, text="Autonomous external API URL").pack(anchor=tk.W, pady=(8, 0))
+        tk.Entry(frame, textvariable=autonomous_agent_external_url_var).pack(anchor=tk.W, fill=tk.X)
         tk.Checkbutton(
             frame,
             text="System-wide input (paste to active app on completion)",
@@ -448,6 +498,14 @@ class VoiceInputApp:
                 external_agent_url_var.get().strip() or "http://127.0.0.1:8000/v1/agent/chat"
             )
             self.llm_defaults["external_agent_url"] = self.external_agent_url_var.get()
+            self.autonomous_agent_mode_var.set(
+                autonomous_agent_mode_var.get().strip() or "internal"
+            )
+            self.llm_defaults["autonomous_agent_mode"] = self.autonomous_agent_mode_var.get()
+            self.autonomous_agent_external_url_var.set(
+                autonomous_agent_external_url_var.get().strip() or "http://127.0.0.1:8000/v1/agent/run"
+            )
+            self.llm_defaults["autonomous_agent_external_url"] = self.autonomous_agent_external_url_var.get()
             self.whisper_model_name_var.set(
                 whisper_model_name_var.get().strip() or "OpenVINO/whisper-large-v3-int8-ov"
             )
@@ -696,6 +754,82 @@ class VoiceInputApp:
     def _format_elapsed(elapsed_s: int) -> str:
         minutes, seconds = divmod(max(0, elapsed_s), 60)
         return f"{minutes:02d}:{seconds:02d}"
+
+    def _run_autonomous_agent_clicked(self) -> None:
+        if self._agent_running:
+            return
+        goal = self.agent_goal_var.get().strip()
+        if not goal:
+            messagebox.showwarning("Goal missing", "Please input an autonomous-agent goal.")
+            return
+        self._agent_running = True
+        if self.agent_run_button is not None:
+            self.agent_run_button.config(state=tk.DISABLED)
+        self.status_var.set("Autonomous agent running...")
+        mode = (self.autonomous_agent_mode_var.get() or "internal").strip()
+        endpoint = (self.autonomous_agent_external_url_var.get() or "").strip()
+        threading.Thread(
+            target=self._run_autonomous_agent_worker,
+            args=(goal, mode, endpoint),
+            daemon=True,
+        ).start()
+
+    def _run_autonomous_agent_worker(self, goal: str, mode: str, endpoint: str) -> None:
+        try:
+            if mode == "external_api":
+                agent = ExternalAPIAutonomousAgent(endpoint_url=endpoint or "http://127.0.0.1:8000/v1/agent/run")
+                result = agent.run(goal=goal, workspace_root=self.root_dir)
+            else:
+                agent = InternalAutonomousAgent(workspace_root=self.root_dir)
+                result = agent.run(goal=goal)
+            self.root.after(0, self._on_autonomous_agent_done, result, "")
+        except Exception as exc:  # noqa: BLE001
+            self.logger.exception("Autonomous agent failed")
+            self.root.after(0, self._on_autonomous_agent_done, None, str(exc))
+
+    def _on_autonomous_agent_done(self, result: AutonomousAgentResult | None, error: str) -> None:
+        self._agent_running = False
+        if self.agent_run_button is not None:
+            self.agent_run_button.config(state=tk.NORMAL)
+
+        if error:
+            self.status_var.set("Autonomous agent failed")
+            messagebox.showerror("Autonomous agent error", error)
+            return
+        if result is None:
+            self.status_var.set("Autonomous agent failed")
+            messagebox.showerror("Autonomous agent error", "Unknown error")
+            return
+
+        self.status_var.set(f"Autonomous agent done ({result.mode})")
+        if self.agent_response_text is not None:
+            self._set_text(self.agent_response_text, self._format_agent_result(result))
+        if self.rest_response_text is not None:
+            self._set_text(self.rest_response_text, result.external_raw_response or "")
+
+    @staticmethod
+    def _format_agent_result(result: AutonomousAgentResult) -> str:
+        lines = [
+            f"Goal: {result.goal}",
+            f"Mode: {result.mode}",
+            f"Success: {result.success}",
+            f"Summary: {result.summary}",
+            "",
+            "Steps:",
+        ]
+        for step in result.steps:
+            output = f" -> {step.output_path}" if step.output_path else ""
+            detail = f" ({step.detail})" if step.detail else ""
+            lines.append(f"- {step.name}: {step.status}{detail}{output}")
+        if result.artifact_paths:
+            lines.append("")
+            lines.append("Artifacts:")
+            for path in result.artifact_paths:
+                lines.append(f"- {path}")
+        if result.report_path:
+            lines.append("")
+            lines.append(f"Report: {result.report_path}")
+        return "\n".join(lines)
 
     def _refresh_dictionary_list(self) -> None:
         if self.dict_list is None or not self.dict_list.winfo_exists():
