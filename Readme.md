@@ -48,8 +48,8 @@ powershell -ExecutionPolicy Bypass -File .\build\windows\build.ps1 -Version 0.1.
 ```
 
 3. Outputs
-- App bundle: `dist/AIDictation2x/`
-- Installer: `dist/installer/AIDictation2x-Setup-0.1.0.exe` (when Inno Setup is installed)
+- App bundle: `dist/staging/AIDictation2x-<version>/AIDictation2x/`
+- Installer: `dist/installer/AIDictation2x-Setup-<version>.exe` (when Inno Setup is installed)
 
 4. Runtime data location (installed app)
 - `%LOCALAPPDATA%\AIDictation2x\`

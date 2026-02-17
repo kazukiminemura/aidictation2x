@@ -7,18 +7,35 @@ $ErrorActionPreference = "Stop"
 
 $ProjectRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 $OutputRoot = Join-Path $ProjectRoot "dist"
+$StagingRoot = Join-Path $OutputRoot "staging"
+$DistPath = Join-Path $StagingRoot "$AppName-$Version"
+$WorkPath = Join-Path $ProjectRoot "build\pyinstaller"
 
 Push-Location $ProjectRoot
 try {
-    if (-not (Get-Command pyinstaller -ErrorAction SilentlyContinue)) {
-        throw "PyInstaller is not installed. Run: pip install pyinstaller"
+    $PythonExe = Join-Path $ProjectRoot "venv\Scripts\python.exe"
+    if (-not (Test-Path $PythonExe)) {
+        $PythonCmd = Get-Command python -ErrorAction SilentlyContinue
+        if ($PythonCmd) {
+            $PythonExe = $PythonCmd.Source
+        }
+    }
+    if (-not (Test-Path $PythonExe)) {
+        throw "Python was not found. Create venv or install Python first."
     }
 
-    pyinstaller `
+    & $PythonExe -m PyInstaller --version *> $null
+    if ($LASTEXITCODE -ne 0) {
+        throw "PyInstaller is not installed for $PythonExe. Run: `"$PythonExe`" -m pip install pyinstaller"
+    }
+
+    & $PythonExe -m PyInstaller `
         --noconfirm `
         --clean `
         --windowed `
         --name $AppName `
+        --distpath $DistPath `
+        --workpath $WorkPath `
         --collect-all openvino `
         --collect-all openvino_genai `
         --collect-submodules vosk `
@@ -26,14 +43,33 @@ try {
         --paths "." `
         main.py
 
-    $DistAppDir = Join-Path $OutputRoot $AppName
+    if ($LASTEXITCODE -ne 0) {
+        throw "PyInstaller build failed. Close running app/explorer windows under dist and retry."
+    }
+
+    $DistAppDir = Join-Path $DistPath $AppName
     if (-not (Test-Path $DistAppDir)) {
         throw "Build output not found: $DistAppDir"
     }
 
     $Iscc = Get-Command iscc -ErrorAction SilentlyContinue
     if (-not $Iscc) {
+        $DefaultIsccPaths = @(
+            "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
+            "C:\Program Files\Inno Setup 6\ISCC.exe",
+            (Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6\ISCC.exe")
+        )
+        foreach ($Candidate in $DefaultIsccPaths) {
+            if (Test-Path $Candidate) {
+                $Iscc = @{ Path = $Candidate }
+                break
+            }
+        }
+    }
+
+    if (-not $Iscc) {
         Write-Host "Inno Setup (iscc) is not installed. EXE build is complete at: $DistAppDir"
+        Write-Host "Install it with: winget install --id JRSoftware.InnoSetup -e"
         exit 0
     }
 
@@ -42,6 +78,10 @@ try {
         "/DMyAppVersion=$Version" `
         "/DMySourceDir=$DistAppDir" `
         (Join-Path $PSScriptRoot "aidictation2x.iss")
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "Inno Setup build failed."
+    }
 
     Write-Host "Installer build finished."
 }
