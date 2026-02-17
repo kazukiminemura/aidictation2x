@@ -110,6 +110,16 @@ class OpenVINOBackend:
     def download_model(self) -> str:
         return self._resolve_model_source(force_download=True)
 
+    def get_download_target_dir(self) -> Path | None:
+        model_path = Path(self.model_ref)
+        if model_path.exists():
+            return model_path if model_path.is_dir() else model_path.parent
+
+        repo_id = _normalize_repo_id(self.model_ref)
+        if not _is_openvino_model_ref(repo_id):
+            return None
+        return self.download_dir / repo_id.replace("/", "--")
+
     def generate(self, text: str, options: LLMOptions, timeout_ms: int) -> str:
         self._ensure_pipeline()
         assert self._pipeline is not None
@@ -215,6 +225,13 @@ class LLMPostEditor:
         if not hasattr(self.backend, "download_model"):
             raise RuntimeError("download_not_supported_for_backend")
         return str(self.backend.download_model())
+
+    def get_download_target_dir(self) -> Path | None:
+        if self.backend is None:
+            return None
+        if hasattr(self.backend, "get_download_target_dir"):
+            return self.backend.get_download_target_dir()
+        return None
 
     def refine(self, raw_text: str, preprocessed_text: str, options: LLMOptions) -> LLMResult:
         _ = raw_text

@@ -433,6 +433,7 @@ class VoiceInputApp:
         ).start()
 
     def _download_asr_model_worker(self, model_name: str, device: str, compute_type: str) -> None:
+        result: dict[str, str] = {"model_path": "", "error": ""}
         try:
             whisper_download_dir = self.root_dir / str(
                 self.asr_defaults.get("whisper_download_dir", "models/whisper")
@@ -443,11 +444,36 @@ class VoiceInputApp:
                 whisper_compute_type=compute_type,
                 whisper_download_dir=whisper_download_dir,
             )
-            model_path = self.asr_engine.download_whisper_model(model_name=model_name)
-            self.root.after(0, self._on_download_asr_model_done, model_path, "")
+            target_dir = self.asr_engine.get_whisper_download_target_dir(model_name=model_name)
+
+            def run_download() -> None:
+                try:
+                    result["model_path"] = self.asr_engine.download_whisper_model(model_name=model_name)
+                except Exception as exc:  # noqa: BLE001
+                    self.logger.exception("ASR model download failed")
+                    result["error"] = str(exc)
+
+            download_thread = threading.Thread(target=run_download, daemon=True)
+            download_thread.start()
+            started = time.perf_counter()
+            while download_thread.is_alive():
+                elapsed_s = int(time.perf_counter() - started)
+                downloaded = self._directory_size_bytes(target_dir)
+                self.root.after(
+                    0,
+                    self.status_var.set,
+                    (
+                        "Downloading ASR model... "
+                        f"{self._format_size(downloaded)} downloaded "
+                        f"({self._format_elapsed(elapsed_s)})"
+                    ),
+                )
+                time.sleep(1.0)
+            download_thread.join()
         except Exception as exc:  # noqa: BLE001
             self.logger.exception("ASR model download failed")
-            self.root.after(0, self._on_download_asr_model_done, "", str(exc))
+            result["error"] = str(exc)
+        self.root.after(0, self._on_download_asr_model_done, result["model_path"], result["error"])
 
     def _on_download_asr_model_done(self, model_path: str, error: str) -> None:
         if error:
@@ -462,12 +488,34 @@ class VoiceInputApp:
         threading.Thread(target=self._download_model_worker, daemon=True).start()
 
     def _download_model_worker(self) -> None:
-        try:
-            model_path = self.llm_editor.download_model()
-            self.root.after(0, self._on_download_model_done, model_path, "")
-        except Exception as exc:  # noqa: BLE001
-            self.logger.exception("Model download failed")
-            self.root.after(0, self._on_download_model_done, "", str(exc))
+        result: dict[str, str] = {"model_path": "", "error": ""}
+
+        def run_download() -> None:
+            try:
+                result["model_path"] = self.llm_editor.download_model()
+            except Exception as exc:  # noqa: BLE001
+                self.logger.exception("Model download failed")
+                result["error"] = str(exc)
+
+        target_dir = self.llm_editor.get_download_target_dir()
+        download_thread = threading.Thread(target=run_download, daemon=True)
+        download_thread.start()
+        started = time.perf_counter()
+        while download_thread.is_alive():
+            elapsed_s = int(time.perf_counter() - started)
+            downloaded = self._directory_size_bytes(target_dir)
+            self.root.after(
+                0,
+                self.status_var.set,
+                (
+                    "Downloading LLM model... "
+                    f"{self._format_size(downloaded)} downloaded "
+                    f"({self._format_elapsed(elapsed_s)})"
+                ),
+            )
+            time.sleep(1.0)
+        download_thread.join()
+        self.root.after(0, self._on_download_model_done, result["model_path"], result["error"])
 
     def _on_download_model_done(self, model_path: str, error: str) -> None:
         if error:
@@ -476,6 +524,45 @@ class VoiceInputApp:
             return
         self.status_var.set("LLM model ready")
         messagebox.showinfo("LLM model", f"Model is ready at:\n{model_path}")
+
+    @staticmethod
+    def _directory_size_bytes(path: Path | None) -> int:
+        if path is None or not path.exists():
+            return 0
+        if path.is_file():
+            try:
+                return path.stat().st_size
+            except OSError:
+                return 0
+
+        total = 0
+        try:
+            for file_path in path.rglob("*"):
+                if file_path.is_file():
+                    try:
+                        total += file_path.stat().st_size
+                    except OSError:
+                        continue
+        except OSError:
+            return 0
+        return total
+
+    @staticmethod
+    def _format_size(size_bytes: int) -> str:
+        size = float(max(0, size_bytes))
+        units = ("B", "KB", "MB", "GB", "TB")
+        unit_idx = 0
+        while size >= 1024.0 and unit_idx < len(units) - 1:
+            size /= 1024.0
+            unit_idx += 1
+        if unit_idx == 0:
+            return f"{int(size)} {units[unit_idx]}"
+        return f"{size:.1f} {units[unit_idx]}"
+
+    @staticmethod
+    def _format_elapsed(elapsed_s: int) -> str:
+        minutes, seconds = divmod(max(0, elapsed_s), 60)
+        return f"{minutes:02d}:{seconds:02d}"
 
     def _refresh_dictionary_list(self) -> None:
         self.dict_entries = self.personal_dictionary.list_entries()

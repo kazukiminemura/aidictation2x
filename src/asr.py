@@ -162,6 +162,18 @@ class ASREngine:
         self._engine = None
         return str(target_dir)
 
+    def get_whisper_download_target_dir(self, model_name: str | None = None) -> Path | None:
+        target_model = (model_name or self.whisper_model_name).strip()
+        if not target_model:
+            return None
+
+        local_path = Path(target_model)
+        if local_path.exists():
+            return local_path if local_path.is_dir() else local_path.parent
+
+        repo_id = _resolve_whisper_repo_id(target_model)
+        return self.whisper_download_dir / repo_id.replace("/", "--")
+
     def _resolve_whisper_model_source(self) -> str:
         model_name = (self.whisper_model_name or "").strip()
         if not model_name:
