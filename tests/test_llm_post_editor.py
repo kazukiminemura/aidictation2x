@@ -128,3 +128,52 @@ def test_refine_external_agent_error_fallback() -> None:
     assert result.applied is False
     assert result.fallback_reason == "external_agent_error"
     assert result.final_text == "前処理済み文"
+
+
+def test_refine_external_agent_bypasses_change_ratio_gate() -> None:
+    def external_agent_caller(url: str, prompt: str, timeout_ms: int) -> str:  # noqa: ARG001
+        return "まったく別の長い応答テキストです。内容が大きく変わっていても外部連携時は採用される。"
+
+    editor = LLMPostEditor(
+        model_path=Path("."),
+        backend=FakeBackend("内部補正結果"),
+        external_agent_caller=external_agent_caller,
+    )
+    options = LLMOptions(
+        **{
+            **BASE_OPTIONS.__dict__,
+            "external_agent_enabled": True,
+            "external_agent_url": "http://127.0.0.1:8000/v1/agent/chat",
+            "max_change_ratio": 0.01,
+        }
+    )
+    result = editor.refine("原文", "短文", options)
+
+    assert result.applied is True
+    assert result.fallback_reason == ""
+    assert "外部連携時は採用される" in result.final_text
+
+
+def test_refine_external_agent_uses_minimum_timeout() -> None:
+    captured: dict[str, int] = {"timeout_ms": 0}
+
+    def external_agent_caller(url: str, prompt: str, timeout_ms: int) -> str:  # noqa: ARG001
+        captured["timeout_ms"] = timeout_ms
+        return "応答"
+
+    editor = LLMPostEditor(
+        model_path=Path("."),
+        backend=FakeBackend("内部補正結果"),
+        external_agent_caller=external_agent_caller,
+        timeout_ms=8000,
+    )
+    options = LLMOptions(
+        **{
+            **BASE_OPTIONS.__dict__,
+            "external_agent_enabled": True,
+            "external_agent_url": "http://127.0.0.1:8000/v1/agent/chat",
+        }
+    )
+    _ = editor.refine("原文", "前処理済み", options)
+
+    assert captured["timeout_ms"] >= 300000

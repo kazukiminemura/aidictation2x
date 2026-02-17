@@ -266,10 +266,12 @@ class LLMPostEditor:
         try:
             if options.external_agent_enabled:
                 source_text = (raw_text or "").strip() or preprocessed_text
+                # External agent can take longer than local LLM; keep a safer minimum timeout.
+                external_timeout_ms = max(self.timeout_ms, 300000)
                 external_call_result = self.external_agent_caller(
                     options.external_agent_url,
                     source_text,
-                    self.timeout_ms,
+                    external_timeout_ms,
                 )
                 if isinstance(external_call_result, tuple):
                     candidate = (external_call_result[0] or "").strip()
@@ -304,17 +306,18 @@ class LLMPostEditor:
             self.logger.exception("LLM refinement failed")
             return self._build_result(preprocessed_text, False, "llm_error", [], started)
 
-        gate = self.quality_gate.validate(preprocessed_text, candidate, options.max_change_ratio)
-        if not gate.accepted:
-            return self._build_result(
-                preprocessed_text,
-                False,
-                gate.reason,
-                [],
-                started,
-                external_agent_response=external_agent_response,
-                external_agent_raw_response=external_agent_raw_response,
-            )
+        if not options.external_agent_enabled:
+            gate = self.quality_gate.validate(preprocessed_text, candidate, options.max_change_ratio)
+            if not gate.accepted:
+                return self._build_result(
+                    preprocessed_text,
+                    False,
+                    gate.reason,
+                    [],
+                    started,
+                    external_agent_response=external_agent_response,
+                    external_agent_raw_response=external_agent_raw_response,
+                )
 
         edits = create_edit_list(preprocessed_text, candidate)
         return self._build_result(
