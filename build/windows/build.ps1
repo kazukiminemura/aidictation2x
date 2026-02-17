@@ -13,6 +13,10 @@ $WorkPath = Join-Path $ProjectRoot "build\pyinstaller"
 
 Push-Location $ProjectRoot
 try {
+    New-Item -ItemType Directory -Path $StagingRoot -Force | Out-Null
+    New-Item -ItemType Directory -Path $DistPath -Force | Out-Null
+    New-Item -ItemType Directory -Path $WorkPath -Force | Out-Null
+
     $PythonExe = Join-Path $ProjectRoot "venv\Scripts\python.exe"
     if (-not (Test-Path $PythonExe)) {
         $PythonCmd = Get-Command python -ErrorAction SilentlyContinue
@@ -38,7 +42,8 @@ try {
         --workpath $WorkPath `
         --collect-all openvino `
         --collect-all openvino_genai `
-        --collect-submodules vosk `
+        --collect-all vosk `
+        --collect-all huggingface_hub `
         --add-data "config;config" `
         --paths "." `
         main.py

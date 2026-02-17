@@ -478,7 +478,7 @@ class VoiceInputApp:
     def _on_download_asr_model_done(self, model_path: str, error: str) -> None:
         if error:
             self.status_var.set("ASR model download failed")
-            messagebox.showerror("ASR model download error", error)
+            messagebox.showerror("ASR model download error", self._format_download_error(error))
             return
         self.status_var.set("ASR model ready")
         messagebox.showinfo("ASR model", f"Model is ready at:\n{model_path}")
@@ -520,10 +520,33 @@ class VoiceInputApp:
     def _on_download_model_done(self, model_path: str, error: str) -> None:
         if error:
             self.status_var.set("Model download failed")
-            messagebox.showerror("LLM model download error", error)
+            messagebox.showerror("LLM model download error", self._format_download_error(error))
             return
         self.status_var.set("LLM model ready")
         messagebox.showinfo("LLM model", f"Model is ready at:\n{model_path}")
+
+    @staticmethod
+    def _format_download_error(error: str) -> str:
+        raw = (error or "").strip()
+        if not raw:
+            return "Unknown error"
+
+        if "huggingface_hub_not_installed" in raw:
+            return (
+                "Downloader component (huggingface_hub) is missing in this build.\n"
+                "Please install a newer installer build that includes downloader dependencies."
+            )
+        if "model_not_found_and_auto_download_disabled" in raw:
+            return (
+                "Model was not found locally and auto-download is disabled.\n"
+                "Use 'Download LLM Model' or enable auto-download in settings."
+            )
+        if "whisper_model_download_failed" in raw or "model_download_failed" in raw:
+            return (
+                "Model download failed.\n"
+                "Please check network/proxy/firewall settings and try again."
+            )
+        return raw
 
     @staticmethod
     def _directory_size_bytes(path: Path | None) -> int:
