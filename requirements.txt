@@ -1,9 +1,10 @@
-﻿vosk==0.3.45
+vosk==0.3.45
 sounddevice==0.4.7
 numpy==1.26.4
 pynput==1.7.7
 pyperclip==1.9.0
 openvino>=2025.0.0
 openvino-genai>=2025.0.0
-huggingface_hub>=0.29.0
+huggingface-hub>=0.29.0
+pyinstaller>=6.0.0
 pytest==8.3.5
