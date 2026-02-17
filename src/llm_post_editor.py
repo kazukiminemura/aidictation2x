@@ -33,6 +33,8 @@ class LLMResult:
     fallback_reason: str
     edits: list[str]
     latency_ms: int
+    external_agent_response: str = ""
+    external_agent_raw_response: str = ""
 
 
 class LLMBackend(Protocol):
@@ -221,7 +223,7 @@ class LLMPostEditor:
         llm_device: str = "GPU",
         auto_download: bool = True,
         download_dir: Path | None = None,
-        external_agent_caller: Callable[[str, str, int], str] | None = None,
+        external_agent_caller: Callable[[str, str, int], str | tuple[str, str]] | None = None,
     ):
         self.model_path = model_path
         self.timeout_ms = timeout_ms
@@ -249,8 +251,10 @@ class LLMPostEditor:
 
     def refine(self, raw_text: str, preprocessed_text: str, options: LLMOptions) -> LLMResult:
         started = time.perf_counter()
+        external_agent_response = ""
+        external_agent_raw_response = ""
 
-        if not options.enabled:
+        if not options.enabled and not options.external_agent_enabled:
             return self._build_result(preprocessed_text, False, "disabled", [], started)
 
         if not preprocessed_text.strip():
@@ -262,11 +266,18 @@ class LLMPostEditor:
         try:
             if options.external_agent_enabled:
                 source_text = (raw_text or "").strip() or preprocessed_text
-                candidate = self.external_agent_caller(
+                external_call_result = self.external_agent_caller(
                     options.external_agent_url,
                     source_text,
                     self.timeout_ms,
-                ).strip()
+                )
+                if isinstance(external_call_result, tuple):
+                    candidate = (external_call_result[0] or "").strip()
+                    external_agent_raw_response = (external_call_result[1] or "").strip()
+                else:
+                    candidate = str(external_call_result or "").strip()
+                    external_agent_raw_response = candidate
+                external_agent_response = candidate
             else:
                 chunks = self._chunk_text(preprocessed_text, max(100, options.max_input_chars))
                 refined_chunks = [self.backend.generate(chunk, options, self.timeout_ms) for chunk in chunks]
@@ -295,10 +306,26 @@ class LLMPostEditor:
 
         gate = self.quality_gate.validate(preprocessed_text, candidate, options.max_change_ratio)
         if not gate.accepted:
-            return self._build_result(preprocessed_text, False, gate.reason, [], started)
+            return self._build_result(
+                preprocessed_text,
+                False,
+                gate.reason,
+                [],
+                started,
+                external_agent_response=external_agent_response,
+                external_agent_raw_response=external_agent_raw_response,
+            )
 
         edits = create_edit_list(preprocessed_text, candidate)
-        return self._build_result(candidate, True, "", edits, started)
+        return self._build_result(
+            candidate,
+            True,
+            "",
+            edits,
+            started,
+            external_agent_response=external_agent_response,
+            external_agent_raw_response=external_agent_raw_response,
+        )
 
     def _resolve_backend(self, model_path: Path) -> LLMBackend | None:
         model_ref = str(model_path)
@@ -365,6 +392,8 @@ class LLMPostEditor:
         fallback_reason: str,
         edits: list[str],
         started: float,
+        external_agent_response: str = "",
+        external_agent_raw_response: str = "",
     ) -> LLMResult:
         latency_ms = int((time.perf_counter() - started) * 1000)
         return LLMResult(
@@ -373,6 +402,8 @@ class LLMPostEditor:
             fallback_reason=fallback_reason,
             edits=edits,
             latency_ms=latency_ms,
+            external_agent_response=external_agent_response,
+            external_agent_raw_response=external_agent_raw_response,
         )
 
 
@@ -451,7 +482,7 @@ def _looks_like_model_dir(path: Path) -> bool:
     return False
 
 
-def _call_external_agent(url: str, prompt: str, timeout_ms: int) -> str:
+def _call_external_agent(url: str, prompt: str, timeout_ms: int) -> tuple[str, str]:
     payload = json.dumps({"prompt": prompt}, ensure_ascii=False).encode("utf-8")
     request = urllib_request.Request(
         url=url,
@@ -472,12 +503,12 @@ def _call_external_agent(url: str, prompt: str, timeout_ms: int) -> str:
     try:
         payload = json.loads(body)
     except json.JSONDecodeError:
-        return body
+        return body, body
 
     text = _extract_text_from_agent_response(payload)
     if not text:
         raise RuntimeError("external_agent_bad_response")
-    return text
+    return text, body
 
 
 def _extract_text_from_agent_response(payload: Any) -> str:
@@ -485,10 +516,29 @@ def _extract_text_from_agent_response(payload: Any) -> str:
         return payload.strip()
 
     if isinstance(payload, dict):
-        for key in ("text", "response", "message", "content", "output", "answer"):
+        for key in (
+            "text",
+            "response",
+            "message",
+            "content",
+            "output",
+            "answer",
+            "result",
+            "generated_text",
+            "reply",
+        ):
             value = payload.get(key)
             if isinstance(value, str) and value.strip():
                 return value.strip()
+            if isinstance(value, dict):
+                nested = _extract_text_from_agent_response(value)
+                if nested:
+                    return nested
+            if isinstance(value, list):
+                for item in value:
+                    nested = _extract_text_from_agent_response(item)
+                    if nested:
+                        return nested
 
         choices = payload.get("choices")
         if isinstance(choices, list) and choices:
@@ -499,5 +549,14 @@ def _extract_text_from_agent_response(payload: Any) -> str:
                     content = message.get("content")
                     if isinstance(content, str) and content.strip():
                         return content.strip()
+                nested = _extract_text_from_agent_response(first)
+                if nested:
+                    return nested
+
+    if isinstance(payload, list):
+        for item in payload:
+            nested = _extract_text_from_agent_response(item)
+            if nested:
+                return nested
 
     return ""

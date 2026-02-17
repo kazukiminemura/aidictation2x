@@ -4,6 +4,7 @@ import tkinter as tk
 import time
 from pathlib import Path
 from tkinter import messagebox
+from tkinter import ttk
 
 from .asr import ASREngine
 from .audio_capture import AudioConfig, AudioRecorder
@@ -65,8 +66,13 @@ class VoiceInputApp:
             value=str(self.asr_defaults.get("whisper_compute_type", "int8"))
         )
         self.properties_window: tk.Toplevel | None = None
-        self.agent_response_window: tk.Toplevel | None = None
         self.agent_response_text: tk.Text | None = None
+        self.rest_response_text: tk.Text | None = None
+        self.asr_text: tk.Text | None = None
+        self.dict_reading_entry: tk.Entry | None = None
+        self.dict_surface_entry: tk.Entry | None = None
+        self.dict_list: tk.Listbox | None = None
+        self.dict_entries = []
         self._processing_active = False
         self._processing_started = 0.0
         self._processing_phase = "Processing"
@@ -154,83 +160,82 @@ class VoiceInputApp:
             font=("Consolas", 9),
         ).pack(fill=tk.X)
 
-        dict_frame = tk.Frame(container, bg="#0a0e14", highlightthickness=1, highlightbackground="#273142")
-        dict_frame.pack(fill=tk.X, pady=(0, 8))
-        tk.Label(
-            dict_frame,
-            text="Personal Dictionary (reading -> surface)",
+        output_title = tk.Label(
+            container,
+            text="Output",
             fg="#8b9fb6",
             bg="#0a0e14",
             anchor="w",
             font=("Consolas", 9, "bold"),
-        ).pack(fill=tk.X, padx=6, pady=(6, 2))
+        )
+        output_title.pack(fill=tk.X)
 
-        form = tk.Frame(dict_frame, bg="#0a0e14")
-        form.pack(fill=tk.X, padx=6, pady=(0, 4))
-        tk.Label(form, text="Reading", fg="#c9d1d9", bg="#0a0e14", font=("Consolas", 9)).pack(side=tk.LEFT)
-        self.dict_reading_entry = tk.Entry(
-            form,
-            width=10,
+        style = ttk.Style(self.root)
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+        style.configure("Output.TNotebook", background="#0a0e14", borderwidth=0)
+        style.configure(
+            "Output.TNotebook.Tab",
+            padding=(10, 4),
+            font=("Consolas", 9, "bold"),
+            foreground="#dbe6f3",
+            background="#1a2433",
+        )
+        style.map(
+            "Output.TNotebook.Tab",
+            foreground=[("selected", "#ffffff")],
+            background=[("selected", "#2f81f7")],
+        )
+
+        tabs = ttk.Notebook(container, style="Output.TNotebook")
+        tabs.pack(fill=tk.BOTH, expand=True)
+
+        asr_tab = tk.Frame(tabs, bg="#0a0e14")
+        final_tab = tk.Frame(tabs, bg="#0a0e14")
+        agent_tab = tk.Frame(tabs, bg="#0a0e14")
+        rest_tab = tk.Frame(tabs, bg="#0a0e14")
+        tabs.add(asr_tab, text="ASR Text")
+        tabs.add(final_tab, text="Final")
+        tabs.add(agent_tab, text="AI Agent")
+        tabs.add(rest_tab, text="REST Raw")
+        tab_selected_colors = {
+            0: "#14532d",  # ASR Text
+            1: "#1d4ed8",  # Final
+            2: "#7c2d12",  # AI Agent
+            3: "#4c1d95",  # REST Raw
+        }
+
+        def apply_selected_tab_color() -> None:
+            try:
+                current_idx = tabs.index("current")
+            except tk.TclError:
+                current_idx = 0
+            selected_bg = tab_selected_colors.get(current_idx, "#2f81f7")
+            style.map(
+                "Output.TNotebook.Tab",
+                foreground=[("selected", "#ffffff")],
+                background=[("selected", selected_bg)],
+            )
+
+        tabs.bind("<<NotebookTabChanged>>", lambda _event: apply_selected_tab_color())
+        apply_selected_tab_color()
+
+        self.asr_text = tk.Text(
+            asr_tab,
+            height=18,
+            wrap=tk.WORD,
             bg="#0b111a",
             fg="#dbe6f3",
             insertbackground="#dbe6f3",
-            relief=tk.FLAT,
-        )
-        self.dict_reading_entry.pack(side=tk.LEFT, padx=(4, 8))
-        tk.Label(form, text="Surface", fg="#c9d1d9", bg="#0a0e14", font=("Consolas", 9)).pack(side=tk.LEFT)
-        self.dict_surface_entry = tk.Entry(
-            form,
-            width=10,
-            bg="#0b111a",
-            fg="#dbe6f3",
-            insertbackground="#dbe6f3",
-            relief=tk.FLAT,
-        )
-        self.dict_surface_entry.pack(side=tk.LEFT, padx=(4, 8))
-        tk.Button(
-            form,
-            text="Add",
-            command=self._add_dictionary_entry,
-            bg="#2ea043",
-            fg="#ffffff",
-            relief=tk.FLAT,
-            padx=8,
-        ).pack(side=tk.LEFT)
-        tk.Button(
-            form,
-            text="Remove",
-            command=self._remove_dictionary_entry,
-            bg="#b62324",
-            fg="#ffffff",
-            relief=tk.FLAT,
-            padx=8,
-        ).pack(side=tk.LEFT, padx=(6, 0))
-
-        self.dict_list = tk.Listbox(
-            dict_frame,
-            height=4,
-            bg="#0b111a",
-            fg="#dbe6f3",
-            selectbackground="#1f6feb",
-            selectforeground="#ffffff",
             relief=tk.FLAT,
             font=("Consolas", 9),
         )
-        self.dict_list.pack(fill=tk.X, padx=6, pady=(0, 6))
-        self.dict_list.bind("<<ListboxSelect>>", self._on_dictionary_selected)
-
-        final_title = tk.Label(
-            container,
-            text="Final text",
-            fg="#8b9fb6",
-            bg="#0a0e14",
-            anchor="w",
-            font=("Consolas", 9, "bold"),
-        )
-        final_title.pack(fill=tk.X)
+        self.asr_text.pack(fill=tk.BOTH, expand=True)
 
         self.final_text = tk.Text(
-            container,
+            final_tab,
             height=18,
             wrap=tk.WORD,
             bg="#0b111a",
@@ -241,11 +246,37 @@ class VoiceInputApp:
         )
         self.final_text.pack(fill=tk.BOTH, expand=True)
 
+        self.agent_response_text = tk.Text(
+            agent_tab,
+            height=18,
+            wrap=tk.WORD,
+            bg="#0b111a",
+            fg="#dbe6f3",
+            insertbackground="#dbe6f3",
+            relief=tk.FLAT,
+            font=("Consolas", 9),
+        )
+        self.agent_response_text.pack(fill=tk.BOTH, expand=True)
+
+        self.rest_response_text = tk.Text(
+            rest_tab,
+            height=18,
+            wrap=tk.WORD,
+            bg="#0b111a",
+            fg="#dbe6f3",
+            insertbackground="#dbe6f3",
+            relief=tk.FLAT,
+            font=("Consolas", 9),
+        )
+        self.rest_response_text.pack(fill=tk.BOTH, expand=True)
+
     def _load_initial_state(self) -> None:
         auto = self.storage.load_autosave()
         if auto:
             self.current_raw_text = auto.raw_text
-            self.final_text.insert("1.0", auto.final_text)
+            self._set_text(self.final_text, auto.final_text)
+            if self.asr_text is not None:
+                self._set_text(self.asr_text, auto.raw_text)
         self.status_var.set("Ready (Ctrl+Space / Ctrl+Shift+Space)")
 
     def _bind_hotkeys(self) -> None:
@@ -271,7 +302,7 @@ class VoiceInputApp:
 
         win = tk.Toplevel(self.root)
         win.title("Properties")
-        win.geometry("420x640")
+        win.geometry("420x700")
         win.resizable(False, False)
         win.transient(self.root)
         self.properties_window = win
@@ -348,6 +379,52 @@ class VoiceInputApp:
             cursor="hand2",
         ).pack(anchor=tk.W, pady=(10, 0))
 
+        dict_frame = tk.Frame(frame, highlightthickness=1, highlightbackground="#273142")
+        dict_frame.pack(fill=tk.X, pady=(12, 0))
+        tk.Label(
+            dict_frame,
+            text="Personal Dictionary (reading -> surface)",
+            anchor="w",
+            font=("Consolas", 9, "bold"),
+        ).pack(fill=tk.X, padx=6, pady=(6, 2))
+
+        dict_form = tk.Frame(dict_frame)
+        dict_form.pack(fill=tk.X, padx=6, pady=(0, 4))
+        tk.Label(dict_form, text="Reading", font=("Consolas", 9)).pack(side=tk.LEFT)
+        self.dict_reading_entry = tk.Entry(dict_form, width=10, relief=tk.FLAT)
+        self.dict_reading_entry.pack(side=tk.LEFT, padx=(4, 8))
+        tk.Label(dict_form, text="Surface", font=("Consolas", 9)).pack(side=tk.LEFT)
+        self.dict_surface_entry = tk.Entry(dict_form, width=10, relief=tk.FLAT)
+        self.dict_surface_entry.pack(side=tk.LEFT, padx=(4, 8))
+        tk.Button(
+            dict_form,
+            text="Add",
+            command=self._add_dictionary_entry,
+            bg="#2ea043",
+            fg="#ffffff",
+            relief=tk.FLAT,
+            padx=8,
+        ).pack(side=tk.LEFT)
+        tk.Button(
+            dict_form,
+            text="Remove",
+            command=self._remove_dictionary_entry,
+            bg="#b62324",
+            fg="#ffffff",
+            relief=tk.FLAT,
+            padx=8,
+        ).pack(side=tk.LEFT, padx=(6, 0))
+
+        self.dict_list = tk.Listbox(
+            dict_frame,
+            height=4,
+            relief=tk.FLAT,
+            font=("Consolas", 9),
+        )
+        self.dict_list.pack(fill=tk.X, padx=6, pady=(0, 6))
+        self.dict_list.bind("<<ListboxSelect>>", self._on_dictionary_selected)
+        self._refresh_dictionary_list()
+
         def download_asr_model_from_dialog() -> None:
             model_name = whisper_model_name_var.get().strip() or "OpenVINO/whisper-large-v3-int8-ov"
             device = whisper_device_var.get().strip() or "auto"
@@ -384,15 +461,21 @@ class VoiceInputApp:
             if before != after:
                 self._toggle_system_wide_input()
             self.status_var.set("Properties updated")
+            self.dict_reading_entry = None
+            self.dict_surface_entry = None
+            self.dict_list = None
             self.properties_window = None
             win.destroy()
 
         buttons = tk.Frame(frame)
-        buttons.pack(fill=tk.X, pady=(16, 0))
+        buttons.pack(fill=tk.X, pady=(12, 8), before=dict_frame)
         tk.Button(buttons, text="Apply", command=apply_and_close, width=10).pack(side=tk.LEFT)
         tk.Button(buttons, text="Cancel", command=win.destroy, width=10).pack(side=tk.RIGHT)
 
         def on_close() -> None:
+            self.dict_reading_entry = None
+            self.dict_surface_entry = None
+            self.dict_list = None
             self.properties_window = None
             win.destroy()
 
@@ -615,12 +698,16 @@ class VoiceInputApp:
         return f"{minutes:02d}:{seconds:02d}"
 
     def _refresh_dictionary_list(self) -> None:
+        if self.dict_list is None or not self.dict_list.winfo_exists():
+            return
         self.dict_entries = self.personal_dictionary.list_entries()
         self.dict_list.delete(0, tk.END)
         for item in self.dict_entries:
             self.dict_list.insert(tk.END, f"{item.reading} -> {item.surface} ({item.count})")
 
     def _on_dictionary_selected(self, event):  # noqa: ANN001
+        if self.dict_list is None or self.dict_reading_entry is None or self.dict_surface_entry is None:
+            return
         if not self.dict_list.curselection():
             return
         idx = self.dict_list.curselection()[0]
@@ -631,6 +718,8 @@ class VoiceInputApp:
         self.dict_surface_entry.insert(0, item.surface)
 
     def _add_dictionary_entry(self) -> None:
+        if self.dict_reading_entry is None or self.dict_surface_entry is None:
+            return
         try:
             self.personal_dictionary.add_or_update(
                 reading=self.dict_reading_entry.get(),
@@ -643,6 +732,8 @@ class VoiceInputApp:
         self.status_var.set("Dictionary updated")
 
     def _remove_dictionary_entry(self) -> None:
+        if self.dict_reading_entry is None:
+            return
         reading = self.dict_reading_entry.get().strip()
         if not reading:
             messagebox.showwarning("No target", "Please select a reading to remove.")
@@ -707,7 +798,7 @@ class VoiceInputApp:
                 raw_text=raw_asr,
                 preprocessed_text=process_result.final_text,
                 options=LLMOptions(
-                    enabled=bool(self.llm_enabled_var.get()),
+                    enabled=bool(self.llm_enabled_var.get() or self.external_agent_enabled_var.get()),
                     strength=str(self.llm_defaults.get("strength", "medium")),
                     max_input_chars=int(self.llm_defaults.get("max_input_chars", 1200)),
                     max_change_ratio=float(self.llm_defaults.get("max_change_ratio", 0.35)),
@@ -753,13 +844,14 @@ class VoiceInputApp:
             self.root.after(
                 0,
                 self._apply_results,
-                raw,
+                raw_asr,
                 final,
                 "",
                 llm_result.fallback_reason,
                 timings,
-                bool(self.external_agent_enabled_var.get() and llm_result.applied),
-                llm_result.final_text,
+                bool(self.external_agent_enabled_var.get()),
+                llm_result.external_agent_response,
+                llm_result.external_agent_raw_response,
             )
         except Exception as exc:  # noqa: BLE001
             self.logger.exception("Pipeline failed")
@@ -767,13 +859,14 @@ class VoiceInputApp:
 
     def _apply_results(
         self,
-        raw: str,
+        asr_text_value: str,
         final: str,
         error: str,
         fallback_reason: str = "",
         timings: dict[str, int] | None = None,
         external_agent_used: bool = False,
         external_agent_response: str = "",
+        external_agent_raw_response: str = "",
     ) -> None:
         self._stop_processing_indicator()
         self.record_button.config(state=tk.NORMAL)
@@ -785,9 +878,19 @@ class VoiceInputApp:
 
         timing_suffix = self._format_timing_suffix(timings)
         self._set_text(self.final_text, final)
-        if external_agent_used and external_agent_response.strip():
-            self._show_external_agent_response_window(external_agent_response)
-        self.current_raw_text = raw
+        if self.asr_text is not None:
+            self._set_text(self.asr_text, asr_text_value)
+        if self.agent_response_text is not None:
+            self._set_text(
+                self.agent_response_text,
+                external_agent_response if external_agent_used else "",
+            )
+        if self.rest_response_text is not None:
+            self._set_text(
+                self.rest_response_text,
+                external_agent_raw_response if external_agent_used else "",
+            )
+        self.current_raw_text = asr_text_value
         if self.system_wide_input_var.get():
             try:
                 self.system_wide_input.paste_to_active_app(final)
@@ -826,42 +929,6 @@ class VoiceInputApp:
         dots = "." * ((elapsed % 3) + 1)
         self.status_var.set(f"{self._processing_phase}{dots} ({elapsed}s)")
         self.root.after(250, self._tick_processing_indicator, token)
-
-    def _show_external_agent_response_window(self, text: str) -> None:
-        if self.agent_response_window is None or not self.agent_response_window.winfo_exists():
-            win = tk.Toplevel(self.root)
-            win.title("External AI Agent Response")
-            win.geometry("520x360")
-            win.transient(self.root)
-            self.agent_response_window = win
-
-            frame = tk.Frame(win, padx=10, pady=10)
-            frame.pack(fill=tk.BOTH, expand=True)
-            viewer = tk.Text(
-                frame,
-                wrap=tk.WORD,
-                bg="#0b111a",
-                fg="#dbe6f3",
-                insertbackground="#dbe6f3",
-                relief=tk.FLAT,
-                font=("Consolas", 9),
-            )
-            viewer.pack(fill=tk.BOTH, expand=True)
-            self.agent_response_text = viewer
-
-            def on_close() -> None:
-                self.agent_response_window = None
-                self.agent_response_text = None
-                win.destroy()
-
-            win.protocol("WM_DELETE_WINDOW", on_close)
-        else:
-            self.agent_response_window.deiconify()
-            self.agent_response_window.lift()
-            self.agent_response_window.focus_force()
-
-        if self.agent_response_text is not None:
-            self._set_text(self.agent_response_text, text)
 
     def _on_close(self) -> None:
         self.system_wide_input.stop()

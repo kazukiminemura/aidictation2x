@@ -77,12 +77,12 @@ def test_refine_splits_long_input() -> None:
     assert len(calls) > 1
 
 
-def test_refine_uses_external_agent_with_raw_text() -> None:
+def test_refine_uses_external_agent_with_raw_and_rest_response() -> None:
     calls: list[tuple[str, str, int]] = []
 
-    def external_agent_caller(url: str, prompt: str, timeout_ms: int) -> str:
+    def external_agent_caller(url: str, prompt: str, timeout_ms: int) -> tuple[str, str]:
         calls.append((url, prompt, timeout_ms))
-        return "外部補正済みの文です。"
+        return "外部補正済みの文です。", '{"text":"外部補正済みの文です。"}'
 
     editor = LLMPostEditor(
         model_path=Path("."),
@@ -100,6 +100,8 @@ def test_refine_uses_external_agent_with_raw_text() -> None:
 
     assert result.applied is True
     assert result.final_text == "外部補正済みの文です。"
+    assert result.external_agent_response == "外部補正済みの文です。"
+    assert result.external_agent_raw_response == '{"text":"外部補正済みの文です。"}'
     assert len(calls) == 1
     assert calls[0][0] == "http://127.0.0.1:8000/v1/agent/chat"
     assert calls[0][1] == "音声認識の原文"
