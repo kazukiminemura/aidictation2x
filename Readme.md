@@ -34,6 +34,31 @@ pip install -r requirements.txt
 python main.py
 ```
 
+## Windows installer build
+1. Install build tools
+```powershell
+pip install pyinstaller
+```
+- Install Inno Setup 6 (optional, needed only for `.exe` installer generation)
+- `iscc.exe` must be available on PATH
+
+2. Build app + installer
+```powershell
+powershell -ExecutionPolicy Bypass -File .\build\windows\build.ps1 -Version 0.1.0
+```
+
+3. Outputs
+- App bundle: `dist/AIDictation2x/`
+- Installer: `dist/installer/AIDictation2x-Setup-0.1.0.exe` (when Inno Setup is installed)
+
+4. Runtime data location (installed app)
+- `%LOCALAPPDATA%\AIDictation2x\`
+- Config/data are copied on first launch:
+  - `config/app_settings.json`
+  - `config/text_rules.json`
+  - `config/personal_dictionary.json`
+  - `data/history.json`, `data/last_session.json`
+
 ## LLM settings
 `config/app_settings.json` keys:
 - `llm_enabled`
