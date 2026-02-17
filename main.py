@@ -29,6 +29,9 @@ def _is_frozen() -> bool:
 
 def _bundle_root_dir() -> Path:
     if _is_frozen():
+        meipass = getattr(sys, "_MEIPASS", "")
+        if meipass:
+            return Path(meipass).resolve()
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parent
 
@@ -53,6 +56,30 @@ def _copy_if_missing(source: Path, destination: Path) -> None:
     shutil.copy2(source, destination)
 
 
+def _config_source_dirs(bundle_root: Path) -> list[Path]:
+    if not _is_frozen():
+        return [bundle_root / "config"]
+
+    exe_dir = Path(sys.executable).resolve().parent
+    candidates = [
+        bundle_root / "config",
+        exe_dir / "config",
+        exe_dir / "_internal" / "config",
+    ]
+    return [path for path in candidates if path.exists()]
+
+
+def _copy_config_if_missing(config_name: str, runtime_root: Path, source_dirs: list[Path]) -> None:
+    destination = runtime_root / "config" / config_name
+    if destination.exists():
+        return
+    for source_dir in source_dirs:
+        source = source_dir / config_name
+        if source.exists():
+            _copy_if_missing(source, destination)
+            return
+
+
 def _prepare_runtime_files(bundle_root: Path, runtime_root: Path) -> None:
     runtime_root.mkdir(parents=True, exist_ok=True)
     (runtime_root / "config").mkdir(parents=True, exist_ok=True)
@@ -62,16 +89,14 @@ def _prepare_runtime_files(bundle_root: Path, runtime_root: Path) -> None:
     if not _is_frozen():
         return
 
-    _copy_if_missing(bundle_root / "config" / "app_settings.json", runtime_root / "config" / "app_settings.json")
-    _copy_if_missing(bundle_root / "config" / "text_rules.json", runtime_root / "config" / "text_rules.json")
-    _copy_if_missing(
-        bundle_root / "config" / "personal_dictionary.json",
-        runtime_root / "config" / "personal_dictionary.json",
-    )
-    _copy_if_missing(
-        bundle_root / "config" / "llm_postedit_rules.json",
-        runtime_root / "config" / "llm_postedit_rules.json",
-    )
+    config_dirs = _config_source_dirs(bundle_root)
+    for config_name in (
+        "app_settings.json",
+        "text_rules.json",
+        "personal_dictionary.json",
+        "llm_postedit_rules.json",
+    ):
+        _copy_config_if_missing(config_name=config_name, runtime_root=runtime_root, source_dirs=config_dirs)
 
 
 def _resolve_runtime_path(runtime_root: Path, raw_path: str) -> Path:
