@@ -51,7 +51,6 @@ class VoiceInputApp:
         self.current_raw_text = ""
         self.hotkey_pressed = False
         self.llm_enabled_var = tk.BooleanVar(value=bool(self.llm_defaults.get("enabled", True)))
-        self.asr_backend_var = tk.StringVar(value=str(self.asr_defaults.get("backend", "vosk")))
         self.whisper_model_name_var = tk.StringVar(
             value=str(self.asr_defaults.get("whisper_model_name", "OpenVINO/whisper-large-v3-int8-ov"))
         )
@@ -60,6 +59,10 @@ class VoiceInputApp:
             value=str(self.asr_defaults.get("whisper_compute_type", "int8"))
         )
         self.properties_window: tk.Toplevel | None = None
+        self._processing_active = False
+        self._processing_started = 0.0
+        self._processing_phase = "Processing"
+        self._processing_tick_token = 0
 
         self.system_wide_input = SystemWideInput(
             dispatch_on_ui=lambda cb: self.root.after(0, cb),
@@ -271,7 +274,6 @@ class VoiceInputApp:
         business_email_var = tk.BooleanVar(value=self.business_email_var.get())
         system_wide_var = tk.BooleanVar(value=self.system_wide_input_var.get())
         llm_enabled_var = tk.BooleanVar(value=self.llm_enabled_var.get())
-        asr_backend_var = tk.StringVar(value=self.asr_backend_var.get())
         whisper_model_name_var = tk.StringVar(value=self.whisper_model_name_var.get())
         whisper_device_var = tk.StringVar(value=self.whisper_device_var.get())
         whisper_compute_type_var = tk.StringVar(value=self.whisper_compute_type_var.get())
@@ -289,8 +291,6 @@ class VoiceInputApp:
             text="System-wide input (paste to active app on completion)",
             variable=system_wide_var,
         ).pack(anchor=tk.W, pady=4)
-        tk.Label(frame, text="ASR backend").pack(anchor=tk.W, pady=(8, 0))
-        tk.OptionMenu(frame, asr_backend_var, "vosk", "whisper").pack(anchor=tk.W, fill=tk.X)
         tk.Label(frame, text="Whisper model name").pack(anchor=tk.W, pady=(8, 0))
         tk.Entry(frame, textvariable=whisper_model_name_var).pack(anchor=tk.W, fill=tk.X)
         tk.Label(frame, text="Whisper device").pack(anchor=tk.W, pady=(8, 0))
@@ -350,7 +350,6 @@ class VoiceInputApp:
             self.business_email_var.set(business_email_var.get())
             self.llm_enabled_var.set(llm_enabled_var.get())
             self.llm_defaults["enabled"] = bool(llm_enabled_var.get())
-            self.asr_backend_var.set(asr_backend_var.get())
             self.whisper_model_name_var.set(
                 whisper_model_name_var.get().strip() or "OpenVINO/whisper-large-v3-int8-ov"
             )
@@ -400,24 +399,19 @@ class VoiceInputApp:
             self.status_var.set("System-wide input: OFF")
 
     def _apply_asr_settings(self) -> None:
-        backend = self.asr_backend_var.get().strip().lower() or "vosk"
         whisper_model_name = (
             self.whisper_model_name_var.get().strip() or "OpenVINO/whisper-large-v3-int8-ov"
         )
         whisper_device = self.whisper_device_var.get().strip() or "auto"
         whisper_compute_type = self.whisper_compute_type_var.get().strip() or "int8"
-        vosk_model_dir = self.root_dir / str(self.asr_defaults.get("vosk_model_dir", "models/vosk-model-ja"))
         whisper_download_dir = self.root_dir / str(self.asr_defaults.get("whisper_download_dir", "models/whisper"))
 
-        self.asr_defaults["backend"] = backend
         self.asr_defaults["whisper_model_name"] = whisper_model_name
         self.asr_defaults["whisper_device"] = whisper_device
         self.asr_defaults["whisper_compute_type"] = whisper_compute_type
         self.asr_defaults["whisper_download_dir"] = str(whisper_download_dir)
 
         self.asr_engine.configure(
-            backend=backend,
-            vosk_model_dir=vosk_model_dir,
             whisper_model_name=whisper_model_name,
             whisper_device=whisper_device,
             whisper_compute_type=whisper_compute_type,
@@ -450,8 +444,11 @@ class VoiceInputApp:
                 try:
                     result["model_path"] = self.asr_engine.download_whisper_model(model_name=model_name)
                 except Exception as exc:  # noqa: BLE001
-                    self.logger.exception("ASR model download failed")
-                    result["error"] = str(exc)
+                    result["error"] = f"{type(exc).__name__}: {exc}"
+                    try:
+                        self.logger.exception("ASR model download failed")
+                    except Exception:
+                        pass
 
             download_thread = threading.Thread(target=run_download, daemon=True)
             download_thread.start()
@@ -478,7 +475,10 @@ class VoiceInputApp:
     def _on_download_asr_model_done(self, model_path: str, error: str) -> None:
         if error:
             self.status_var.set("ASR model download failed")
-            messagebox.showerror("ASR model download error", self._format_download_error(error))
+            messagebox.showerror(
+                "ASR model download error",
+                f"{self._format_download_error(error)}\n\nLog: {self.root_dir / 'logs' / 'app.log'}",
+            )
             return
         self.status_var.set("ASR model ready")
         messagebox.showinfo("ASR model", f"Model is ready at:\n{model_path}")
@@ -494,8 +494,11 @@ class VoiceInputApp:
             try:
                 result["model_path"] = self.llm_editor.download_model()
             except Exception as exc:  # noqa: BLE001
-                self.logger.exception("Model download failed")
-                result["error"] = str(exc)
+                result["error"] = f"{type(exc).__name__}: {exc}"
+                try:
+                    self.logger.exception("Model download failed")
+                except Exception:
+                    pass
 
         target_dir = self.llm_editor.get_download_target_dir()
         download_thread = threading.Thread(target=run_download, daemon=True)
@@ -520,7 +523,10 @@ class VoiceInputApp:
     def _on_download_model_done(self, model_path: str, error: str) -> None:
         if error:
             self.status_var.set("Model download failed")
-            messagebox.showerror("LLM model download error", self._format_download_error(error))
+            messagebox.showerror(
+                "LLM model download error",
+                f"{self._format_download_error(error)}\n\nLog: {self.root_dir / 'logs' / 'app.log'}",
+            )
             return
         self.status_var.set("LLM model ready")
         messagebox.showinfo("LLM model", f"Model is ready at:\n{model_path}")
@@ -628,6 +634,7 @@ class VoiceInputApp:
         if not self.recorder.is_recording:
             try:
                 self.recorder.start()
+                self.record_button.config(state=tk.NORMAL)
                 self.record_button.config(text="Stop Recording", bg="#b62324", activebackground="#d73a49")
                 self.status_var.set("Recording")
             except Exception as exc:  # noqa: BLE001
@@ -635,11 +642,20 @@ class VoiceInputApp:
                 self.logger.exception("Failed to start recording")
             return
 
-        self.record_button.config(text="Start Recording", bg="#1f6feb", activebackground="#2f81f7")
-        self.status_var.set("Transcribing")
+        self.record_button.config(text="Start Recording", bg="#1f6feb", activebackground="#2f81f7", state=tk.DISABLED)
+        self._start_processing_indicator("Stopping")
+        threading.Thread(target=self._stop_and_process_worker, daemon=True).start()
 
-        audio = self.recorder.stop()
-        threading.Thread(target=self._transcribe_and_process, args=(audio,), daemon=True).start()
+    def _stop_and_process_worker(self) -> None:
+        try:
+            audio = self.recorder.stop()
+        except Exception as exc:  # noqa: BLE001
+            self.logger.exception("Failed to stop recording")
+            self.root.after(0, self._apply_results, "", "", str(exc), "", {})
+            return
+
+        self.root.after(0, self._set_processing_phase, "Transcribing")
+        self._transcribe_and_process(audio)
 
     def _transcribe_and_process(self, audio_data) -> None:  # noqa: ANN001
         pipeline_started = time.perf_counter()
@@ -723,9 +739,12 @@ class VoiceInputApp:
         fallback_reason: str = "",
         timings: dict[str, int] | None = None,
     ) -> None:
+        self._stop_processing_indicator()
+        self.record_button.config(state=tk.NORMAL)
+
         if error:
             self.status_var.set("Error")
-            messagebox.showerror("Processing error", error)
+            messagebox.showerror("Processing error", self._format_processing_error(error))
             return
 
         timing_suffix = self._format_timing_suffix(timings)
@@ -746,6 +765,29 @@ class VoiceInputApp:
                 self.status_var.set(f"Done (fallback: {fallback_reason}){timing_suffix}")
             else:
                 self.status_var.set(f"Done{timing_suffix}")
+
+    def _start_processing_indicator(self, phase: str) -> None:
+        self._processing_active = True
+        self._processing_started = time.perf_counter()
+        self._processing_phase = phase
+        self._processing_tick_token += 1
+        token = self._processing_tick_token
+        self._tick_processing_indicator(token)
+
+    def _set_processing_phase(self, phase: str) -> None:
+        self._processing_phase = phase
+
+    def _stop_processing_indicator(self) -> None:
+        self._processing_active = False
+        self._processing_tick_token += 1
+
+    def _tick_processing_indicator(self, token: int) -> None:
+        if not self._processing_active or token != self._processing_tick_token:
+            return
+        elapsed = int(time.perf_counter() - self._processing_started)
+        dots = "." * ((elapsed % 3) + 1)
+        self.status_var.set(f"{self._processing_phase}{dots} ({elapsed}s)")
+        self.root.after(250, self._tick_processing_indicator, token)
 
     def _on_close(self) -> None:
         self.system_wide_input.stop()
@@ -772,6 +814,27 @@ class VoiceInputApp:
         parts = [f"{labels[key]} {timings[key]}ms" for key in ordered_keys if key in timings]
         return f" [{', '.join(parts)}]" if parts else ""
 
+    @staticmethod
+    def _format_processing_error(error: str) -> str:
+        raw = (error or "").strip()
+        normalized = raw.lower()
+        if "asr_empty_output" in normalized:
+            return (
+                "ASR could not produce text from this audio.\n"
+                "Check microphone input level and Whisper model readiness, then retry."
+            )
+        if "asr_failed_all_windows" in normalized:
+            return (
+                "ASR failed on all audio windows.\n"
+                "Try a shorter recording and switch Whisper device (auto/cpu) in Properties."
+            )
+        if "vector too long" in raw.lower():
+            return (
+                "Audio segment is too long for one-pass transcription.\n"
+                "Please try a shorter recording segment and retry."
+            )
+        return raw or "Unknown error"
+
 
 def build_app(
     root: tk.Tk,
@@ -786,8 +849,6 @@ def build_app(
 ) -> VoiceInputApp:
     engine = ASREngine(
         sample_rate_hz=audio_config.sample_rate_hz,
-        backend=str(asr_defaults.get("backend", "vosk")),
-        vosk_model_dir=root_dir / str(asr_defaults.get("vosk_model_dir", "models/vosk-model-ja")),
         whisper_model_name=str(asr_defaults.get("whisper_model_name", "OpenVINO/whisper-large-v3-int8-ov")),
         whisper_device=str(asr_defaults.get("whisper_device", "auto")),
         whisper_compute_type=str(asr_defaults.get("whisper_compute_type", "int8")),

@@ -36,13 +36,14 @@ try {
     & $PythonExe -m PyInstaller `
         --noconfirm `
         --clean `
+        --noupx `
         --windowed `
         --name $AppName `
         --distpath $DistPath `
         --workpath $WorkPath `
         --collect-all openvino `
         --collect-all openvino_genai `
-        --collect-all vosk `
+        --collect-all openvino_tokenizers `
         --collect-all huggingface_hub `
         --add-data "config;config" `
         --paths "." `

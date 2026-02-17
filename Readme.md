@@ -1,12 +1,12 @@
 ﻿# AI Dictation 2x (ASR + OpenVINO LLM)
 
-This app records microphone audio, runs local ASR (Vosk / Whisper), applies text cleanup rules,
+This app records microphone audio, runs local ASR (Whisper), applies text cleanup rules,
 and then post-edits text with a local OpenVINO LLM backend.
 
 ## Features
 - Push-to-talk recording (`Ctrl+Space`)
 - Optional system-wide paste (`Ctrl+Shift+Space`)
-- Local ASR (Vosk / Whisper)
+- Local ASR (Whisper)
 - Rule-based cleanup (fillers, habits, punctuation)
 - Personal dictionary (reading -> surface)
 - Local OpenVINO LLM post-edit with quality gate and fallback
@@ -19,17 +19,13 @@ and then post-edits text with a local OpenVINO LLM backend.
 pip install -r requirements.txt
 ```
 
-2. Place a Japanese Vosk model under:
-- `models/vosk-model-ja`
-- expected file example: `models/vosk-model-ja/am/final.mdl`
-
-3. OpenVINO model handling:
+2. OpenVINO model handling:
 - Default `llm_model_path` is `OpenVINO/Qwen3-8B-int4-cw-ov`
 - Use the **Download LLM Model** button in the app to download from Hugging Face
 - Download target defaults to `models/openvino`
 - You can also set `llm_model_path` to a local OpenVINO model directory
 
-4. Run
+3. Run
 ```bash
 python main.py
 ```
@@ -75,13 +71,11 @@ powershell -ExecutionPolicy Bypass -File .\build\windows\build.ps1 -Version 0.1.
 
 ## ASR settings
 `config/app_settings.json` keys:
-- `asr_backend` (`vosk` | `whisper`)
-- `vosk_model_dir`
 - `whisper_model_name` (default: `OpenVINO/whisper-large-v3-int8-ov`)
 - `whisper_device` (`auto` | `cpu` | `cuda`)
 - `whisper_download_dir` (pre-download destination for Whisper models)
 
-You can also switch ASR backend/model from `Properties...` in the app.
+You can switch ASR model from `Properties...` in the app.
 Use `Download ASR Model (Whisper)` in `Properties...` to pre-download before recording.
 Whisper ASR uses OpenVINO (`openvino_genai.WhisperPipeline`) and expects an OpenVINO-converted model directory.
 

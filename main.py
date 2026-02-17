@@ -16,11 +16,41 @@ from src.ui_app import build_app
 APP_NAME = "AIDictation2x"
 
 
-def setup_logging(level: str) -> None:
+def setup_logging(level: str, runtime_root: Path | None = None) -> None:
+    handlers: list[logging.Handler] = []
+    if runtime_root is not None:
+        log_dir = runtime_root / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        handlers.append(logging.FileHandler(log_dir / "app.log", encoding="utf-8"))
+    handlers.append(logging.StreamHandler(sys.stderr))
+
     logging.basicConfig(
         level=getattr(logging, level.upper(), logging.INFO),
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        force=True,
+        handlers=handlers,
     )
+
+
+def _ensure_standard_streams() -> None:
+    # Windowed executable can start without stdio; some libs (logging/tqdm) require writable streams.
+    devnull_out = open(os.devnull, "w", encoding="utf-8", errors="replace")  # noqa: SIM115
+    devnull_err = open(os.devnull, "w", encoding="utf-8", errors="replace")  # noqa: SIM115
+    if sys.stdout is None:
+        sys.stdout = devnull_out
+    if sys.stderr is None:
+        sys.stderr = devnull_err
+    if getattr(sys, "__stdout__", None) is None:
+        sys.__stdout__ = sys.stdout
+    if getattr(sys, "__stderr__", None) is None:
+        sys.__stderr__ = sys.stderr
+
+
+def _configure_hf_runtime_env() -> None:
+    # Avoid progress / xet paths that can fail in windowed builds without a console stream.
+    os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+    os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
+    os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "0")
 
 
 def _is_frozen() -> bool:
@@ -124,12 +154,16 @@ def _resolve_model_path(runtime_root: Path, raw_value: str) -> str:
 
 
 def main() -> None:
+    _ensure_standard_streams()
+    _configure_hf_runtime_env()
     bundle_root = _bundle_root_dir()
     runtime_root = _runtime_root_dir(bundle_root)
     _prepare_runtime_files(bundle_root=bundle_root, runtime_root=runtime_root)
 
-    settings = load_json(runtime_root / "config" / "app_settings.json")
-    setup_logging(settings.get("log_level", "INFO"))
+    settings_path = runtime_root / "config" / "app_settings.json"
+    settings = load_json(settings_path)
+
+    setup_logging(settings.get("log_level", "INFO"), runtime_root=runtime_root)
 
     rules_path = _resolve_runtime_path(runtime_root, settings.get("text_rules_file", "config/text_rules.json"))
     if not rules_path.exists():
@@ -148,10 +182,6 @@ def main() -> None:
     )
 
     asr_defaults = {
-        "backend": str(settings.get("asr_backend", "vosk")),
-        "vosk_model_dir": str(
-            _resolve_runtime_path(runtime_root, str(settings.get("vosk_model_dir", "models/vosk-model-ja")))
-        ),
         "whisper_model_name": str(settings.get("whisper_model_name", "OpenVINO/whisper-large-v3-int8-ov")),
         "whisper_device": str(settings.get("whisper_device", "auto")),
         "whisper_compute_type": str(settings.get("whisper_compute_type", "int8")),

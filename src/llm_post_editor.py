@@ -1,5 +1,6 @@
 ﻿import json
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -92,14 +93,21 @@ class OpenVINOBackend:
 
         try:
             from huggingface_hub import snapshot_download
+            from huggingface_hub.utils import disable_progress_bars
         except ImportError as exc:
             raise RuntimeError("huggingface_hub_not_installed") from exc
 
-        snapshot_download(
-            repo_id=repo_id,
-            local_dir=str(target_dir),
-            local_dir_use_symlinks=False,
-        )
+        disable_progress_bars()
+        os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+        kwargs = {
+            "repo_id": repo_id,
+            "local_dir": str(target_dir),
+            "local_dir_use_symlinks": False,
+        }
+        try:
+            snapshot_download(tqdm_class=None, **kwargs)
+        except TypeError:
+            snapshot_download(**kwargs)
 
         if not _looks_like_model_dir(target_dir):
             raise RuntimeError("model_download_failed")

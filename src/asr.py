@@ -1,8 +1,7 @@
-import json
+import os
 from pathlib import Path
 
 import numpy as np
-from vosk import KaldiRecognizer, Model
 
 _WHISPER_MODEL_REPOS = {
     "tiny": "OpenVINO/whisper-tiny",
@@ -14,27 +13,6 @@ _WHISPER_MODEL_REPOS = {
 }
 
 
-class _VoskEngine:
-    def __init__(self, model_dir: Path, sample_rate_hz: int):
-        if not model_dir.exists():
-            raise FileNotFoundError(
-                f"Vosk model not found: {model_dir}. Please place the model under models/."
-            )
-        self.model = Model(str(model_dir))
-        self.sample_rate_hz = sample_rate_hz
-
-    def transcribe(self, audio_data: np.ndarray) -> str:
-        if audio_data.size == 0:
-            return ""
-
-        pcm = (np.clip(audio_data, -1.0, 1.0) * 32767).astype(np.int16).tobytes()
-        rec = KaldiRecognizer(self.model, self.sample_rate_hz)
-        rec.SetWords(True)
-        rec.AcceptWaveform(pcm)
-        result = json.loads(rec.FinalResult())
-        return result.get("text", "").strip()
-
-
 class _WhisperEngine:
     def __init__(self, model_name: str, device: str, compute_type: str):  # noqa: ARG002
         try:
@@ -44,51 +22,85 @@ class _WhisperEngine:
 
         ov_device = _to_openvino_device(device)
         self.pipeline = ov_genai.WhisperPipeline(model_name, ov_device)
-        self.generation_config = ov_genai.WhisperGenerationConfig()
-        self.generation_config.language = _select_japanese_language_key(self.generation_config)
+        # Use model-provided defaults; constructing empty config can miss required maps (e.g. lang_to_id).
+        self.generation_config = self.pipeline.get_generation_config()
+        ja_key = _select_japanese_language_key(self.generation_config)
+        if ja_key:
+            self.generation_config.language = ja_key
         self.generation_config.task = "transcribe"
         self.generation_config.return_timestamps = False
+        self.generation_config_auto = self.pipeline.get_generation_config()
+        self.generation_config_auto.task = "transcribe"
+        self.generation_config_auto.return_timestamps = False
+        # Keep chunks conservative and split again on runtime "vector too long" errors.
+        self.max_chunk_samples = 4 * 16000
+        self.min_chunk_samples = max(1, int(0.25 * 16000))
 
     def transcribe(self, audio_data: np.ndarray) -> str:
         if audio_data.size == 0:
             return ""
 
-        result = self.pipeline.generate(
-            np.asarray(audio_data, dtype=np.float32).tolist(),
-            self.generation_config,
-        )
-        texts = list(getattr(result, "texts", []))
-        if texts:
-            return str(texts[0]).strip()
-        return ""
+        audio = np.asarray(audio_data, dtype=np.float32)
+        texts = self._transcribe_with_config(audio, self.generation_config)
+        if not texts and _has_voice(audio):
+            # Fallback to auto language detection when explicit Japanese key yields empty output.
+            texts = self._transcribe_with_config(audio, self.generation_config_auto)
+        return " ".join(texts).strip()
+
+    def _transcribe_with_config(self, audio: np.ndarray, config) -> list[str]:  # noqa: ANN001
+        texts: list[str] = []
+        for start in range(0, int(audio.size), self.max_chunk_samples):
+            chunk = audio[start : start + self.max_chunk_samples]
+            if chunk.size == 0:
+                continue
+            texts.extend(self._transcribe_chunk_recursive(chunk, config))
+        return texts
+
+    def _transcribe_chunk_recursive(self, chunk: np.ndarray, config) -> list[str]:  # noqa: ANN001
+        try:
+            result = self.pipeline.generate(
+                np.asarray(chunk, dtype=np.float32).tolist(),
+                config,
+            )
+            chunk_texts = list(getattr(result, "texts", []))
+            if not chunk_texts:
+                return []
+            text = str(chunk_texts[0]).strip()
+            return [text] if text else []
+        except Exception as exc:  # noqa: BLE001
+            if "vector too long" not in str(exc).lower() or int(chunk.size) <= self.min_chunk_samples:
+                raise
+            mid = int(chunk.size // 2)
+            if mid <= 0:
+                raise
+            left = chunk[:mid]
+            right = chunk[mid:]
+            texts: list[str] = []
+            if left.size:
+                texts.extend(self._transcribe_chunk_recursive(left, config))
+            if right.size:
+                texts.extend(self._transcribe_chunk_recursive(right, config))
+            return texts
 
 
 class ASREngine:
     def __init__(
         self,
         sample_rate_hz: int,
-        backend: str = "vosk",
-        vosk_model_dir: Path | None = None,
         whisper_model_name: str = "OpenVINO/whisper-large-v3-int8-ov",
         whisper_device: str = "auto",
         whisper_compute_type: str = "int8",
         whisper_download_dir: Path | None = None,
     ):
         self.sample_rate_hz = sample_rate_hz
-        self.backend = backend
-        self.vosk_model_dir = vosk_model_dir or Path("models") / "vosk-model-ja"
         self.whisper_model_name = whisper_model_name
         self.whisper_device = whisper_device
         self.whisper_compute_type = whisper_compute_type
         self.whisper_download_dir = whisper_download_dir or Path("models") / "whisper"
-        self._engine: _VoskEngine | _WhisperEngine | None = None
-        if self.backend.strip().lower() == "vosk":
-            self._engine = self._build_engine()
+        self._engine: _WhisperEngine | None = None
 
     def configure(
         self,
-        backend: str | None = None,
-        vosk_model_dir: Path | None = None,
         whisper_model_name: str | None = None,
         whisper_device: str | None = None,
         whisper_compute_type: str | None = None,
@@ -96,12 +108,6 @@ class ASREngine:
     ) -> None:
         changed = False
 
-        if backend is not None and backend != self.backend:
-            self.backend = backend
-            changed = True
-        if vosk_model_dir is not None and vosk_model_dir != self.vosk_model_dir:
-            self.vosk_model_dir = vosk_model_dir
-            changed = True
         if whisper_model_name is not None and whisper_model_name != self.whisper_model_name:
             self.whisper_model_name = whisper_model_name
             changed = True
@@ -119,20 +125,56 @@ class ASREngine:
             self._engine = None
 
     def transcribe(self, audio_data: np.ndarray) -> str:
+        audio = np.asarray(audio_data, dtype=np.float32)
+        if audio.size == 0 or not _has_voice(audio):
+            return ""
+
         if self._engine is None:
             self._engine = self._build_engine()
-        return self._engine.transcribe(audio_data)
+        try:
+            text = self._engine.transcribe(audio).strip()
+        except Exception as exc:  # noqa: BLE001
+            if "vector too long" not in str(exc).lower():
+                raise
+            # Last-resort fallback: split by short fixed windows and skip only failing windows.
+            window = max(1, int(self.sample_rate_hz * 1))
+            texts: list[str] = []
+            failed_windows = 0
+            for start in range(0, int(audio.size), window):
+                chunk = audio[start : start + window]
+                if chunk.size == 0:
+                    continue
+                try:
+                    text = self._engine.transcribe(chunk).strip()
+                except Exception as inner_exc:  # noqa: BLE001
+                    if "vector too long" in str(inner_exc).lower():
+                        failed_windows += 1
+                        continue
+                    raise
+                if text:
+                    texts.append(text)
+            joined = " ".join(texts).strip()
+            if joined:
+                return joined
+            if _has_voice(audio):
+                if failed_windows > 0:
+                    raise RuntimeError("asr_failed_all_windows")
+                raise RuntimeError("asr_empty_output")
+            return ""
+        if text:
+            return text
+        audio = np.asarray(audio_data, dtype=np.float32)
+        if _has_voice(audio):
+            raise RuntimeError("asr_empty_output")
+        return ""
 
-    def _build_engine(self) -> _VoskEngine | _WhisperEngine:
-        backend = (self.backend or "vosk").strip().lower()
-        if backend == "whisper":
-            model_source = self._resolve_whisper_model_source()
-            return _WhisperEngine(
-                model_name=model_source,
-                device=self.whisper_device,
-                compute_type=self.whisper_compute_type,
-            )
-        return _VoskEngine(model_dir=self.vosk_model_dir, sample_rate_hz=self.sample_rate_hz)
+    def _build_engine(self) -> _WhisperEngine:
+        model_source = self._resolve_whisper_model_source()
+        return _WhisperEngine(
+            model_name=model_source,
+            device=self.whisper_device,
+            compute_type=self.whisper_compute_type,
+        )
 
     def download_whisper_model(self, model_name: str | None = None) -> str:
         target_model = (model_name or self.whisper_model_name).strip()
@@ -146,16 +188,23 @@ class ASREngine:
         repo_id = _resolve_whisper_repo_id(target_model)
         try:
             from huggingface_hub import snapshot_download
+            from huggingface_hub.utils import disable_progress_bars
         except ImportError as exc:
             raise RuntimeError("huggingface_hub_not_installed") from exc
 
+        disable_progress_bars()
+        os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
         self.whisper_download_dir.mkdir(parents=True, exist_ok=True)
         target_dir = self.whisper_download_dir / repo_id.replace("/", "--")
-        snapshot_download(
-            repo_id=repo_id,
-            local_dir=str(target_dir),
-            local_dir_use_symlinks=False,
-        )
+        kwargs = {
+            "repo_id": repo_id,
+            "local_dir": str(target_dir),
+            "local_dir_use_symlinks": False,
+        }
+        try:
+            snapshot_download(tqdm_class=None, **kwargs)
+        except TypeError:
+            snapshot_download(**kwargs)
         if not _looks_like_openvino_model_dir(target_dir):
             raise RuntimeError("whisper_model_download_failed")
         self.whisper_model_name = str(target_dir)
@@ -248,3 +297,10 @@ def _select_japanese_language_key(generation_config) -> str | None:  # noqa: ANN
             return str(key)
 
     return None
+
+
+def _has_voice(audio_data: np.ndarray) -> bool:
+    if audio_data.size == 0:
+        return False
+    audio = np.asarray(audio_data, dtype=np.float32)
+    return float(np.mean(np.abs(audio))) >= 0.003
