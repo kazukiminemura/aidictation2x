@@ -7,7 +7,9 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 
 from .quality_gate import QualityGate
 from .text_processing import create_edit_list
@@ -20,6 +22,8 @@ class LLMOptions:
     max_input_chars: int
     max_change_ratio: float
     domain_hint: str
+    external_agent_enabled: bool = False
+    external_agent_url: str = "http://127.0.0.1:8000/v1/agent/chat"
 
 
 @dataclass
@@ -217,6 +221,7 @@ class LLMPostEditor:
         llm_device: str = "GPU",
         auto_download: bool = True,
         download_dir: Path | None = None,
+        external_agent_caller: Callable[[str, str, int], str] | None = None,
     ):
         self.model_path = model_path
         self.timeout_ms = timeout_ms
@@ -226,6 +231,7 @@ class LLMPostEditor:
         self.logger = logging.getLogger(__name__)
         self.quality_gate = QualityGate(blocked_patterns or [])
         self.backend = backend or self._resolve_backend(model_path)
+        self.external_agent_caller = external_agent_caller or _call_external_agent
 
     def download_model(self) -> str:
         if self.backend is None:
@@ -242,7 +248,6 @@ class LLMPostEditor:
         return None
 
     def refine(self, raw_text: str, preprocessed_text: str, options: LLMOptions) -> LLMResult:
-        _ = raw_text
         started = time.perf_counter()
 
         if not options.enabled:
@@ -251,13 +256,21 @@ class LLMPostEditor:
         if not preprocessed_text.strip():
             return self._build_result(preprocessed_text, False, "empty_input", [], started)
 
-        if self.backend is None:
+        if self.backend is None and not options.external_agent_enabled:
             return self._build_result(preprocessed_text, False, "backend_unavailable", [], started)
 
         try:
-            chunks = self._chunk_text(preprocessed_text, max(100, options.max_input_chars))
-            refined_chunks = [self.backend.generate(chunk, options, self.timeout_ms) for chunk in chunks]
-            candidate = "".join(refined_chunks).strip()
+            if options.external_agent_enabled:
+                source_text = (raw_text or "").strip() or preprocessed_text
+                candidate = self.external_agent_caller(
+                    options.external_agent_url,
+                    source_text,
+                    self.timeout_ms,
+                ).strip()
+            else:
+                chunks = self._chunk_text(preprocessed_text, max(100, options.max_input_chars))
+                refined_chunks = [self.backend.generate(chunk, options, self.timeout_ms) for chunk in chunks]
+                candidate = "".join(refined_chunks).strip()
         except subprocess.TimeoutExpired:
             return self._build_result(preprocessed_text, False, "timeout", [], started)
         except RuntimeError as exc:
@@ -268,6 +281,8 @@ class LLMPostEditor:
                 "huggingface_hub_not_installed",
                 "model_download_failed",
                 "download_not_supported_for_backend",
+                "external_agent_error",
+                "external_agent_bad_response",
             }:
                 # Treat expected environment/model readiness issues as graceful fallback.
                 self.logger.warning("LLM skipped: %s", reason)
@@ -434,3 +449,55 @@ def _looks_like_model_dir(path: Path) -> bool:
         if xml_file.with_suffix(".bin").exists():
             return True
     return False
+
+
+def _call_external_agent(url: str, prompt: str, timeout_ms: int) -> str:
+    payload = json.dumps({"prompt": prompt}, ensure_ascii=False).encode("utf-8")
+    request = urllib_request.Request(
+        url=url,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    try:
+        with urllib_request.urlopen(request, timeout=max(1.0, timeout_ms / 1000.0)) as response:
+            body = response.read().decode("utf-8", errors="replace").strip()
+    except (TimeoutError, urllib_error.HTTPError, urllib_error.URLError) as exc:
+        raise RuntimeError("external_agent_error") from exc
+
+    if not body:
+        raise RuntimeError("external_agent_bad_response")
+
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        return body
+
+    text = _extract_text_from_agent_response(payload)
+    if not text:
+        raise RuntimeError("external_agent_bad_response")
+    return text
+
+
+def _extract_text_from_agent_response(payload: Any) -> str:
+    if isinstance(payload, str):
+        return payload.strip()
+
+    if isinstance(payload, dict):
+        for key in ("text", "response", "message", "content", "output", "answer"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+
+        choices = payload.get("choices")
+        if isinstance(choices, list) and choices:
+            first = choices[0]
+            if isinstance(first, dict):
+                message = first.get("message")
+                if isinstance(message, dict):
+                    content = message.get("content")
+                    if isinstance(content, str) and content.strip():
+                        return content.strip()
+
+    return ""

@@ -50,7 +50,13 @@ class VoiceInputApp:
         self.status_var = tk.StringVar(value="Starting...")
         self.current_raw_text = ""
         self.hotkey_pressed = False
-        self.llm_enabled_var = tk.BooleanVar(value=bool(self.llm_defaults.get("enabled", True)))
+        self.llm_enabled_var = tk.BooleanVar(value=bool(self.llm_defaults.get("enabled", False)))
+        self.external_agent_enabled_var = tk.BooleanVar(
+            value=bool(self.llm_defaults.get("external_agent_enabled", False))
+        )
+        self.external_agent_url_var = tk.StringVar(
+            value=str(self.llm_defaults.get("external_agent_url", "http://127.0.0.1:8000/v1/agent/chat"))
+        )
         self.whisper_model_name_var = tk.StringVar(
             value=str(self.asr_defaults.get("whisper_model_name", "OpenVINO/whisper-large-v3-int8-ov"))
         )
@@ -59,6 +65,8 @@ class VoiceInputApp:
             value=str(self.asr_defaults.get("whisper_compute_type", "int8"))
         )
         self.properties_window: tk.Toplevel | None = None
+        self.agent_response_window: tk.Toplevel | None = None
+        self.agent_response_text: tk.Text | None = None
         self._processing_active = False
         self._processing_started = 0.0
         self._processing_phase = "Processing"
@@ -263,7 +271,7 @@ class VoiceInputApp:
 
         win = tk.Toplevel(self.root)
         win.title("Properties")
-        win.geometry("420x570")
+        win.geometry("420x640")
         win.resizable(False, False)
         win.transient(self.root)
         self.properties_window = win
@@ -274,6 +282,8 @@ class VoiceInputApp:
         business_email_var = tk.BooleanVar(value=self.business_email_var.get())
         system_wide_var = tk.BooleanVar(value=self.system_wide_input_var.get())
         llm_enabled_var = tk.BooleanVar(value=self.llm_enabled_var.get())
+        external_agent_enabled_var = tk.BooleanVar(value=self.external_agent_enabled_var.get())
+        external_agent_url_var = tk.StringVar(value=self.external_agent_url_var.get())
         whisper_model_name_var = tk.StringVar(value=self.whisper_model_name_var.get())
         whisper_device_var = tk.StringVar(value=self.whisper_device_var.get())
         whisper_compute_type_var = tk.StringVar(value=self.whisper_compute_type_var.get())
@@ -286,6 +296,11 @@ class VoiceInputApp:
         tk.Checkbutton(frame, text="Remove habits", variable=remove_habits_var).pack(anchor=tk.W, pady=4)
         tk.Checkbutton(frame, text="Convert to business email", variable=business_email_var).pack(anchor=tk.W, pady=4)
         tk.Checkbutton(frame, text="Enable LLM correction", variable=llm_enabled_var).pack(anchor=tk.W, pady=4)
+        tk.Checkbutton(frame, text="Use external AI agent", variable=external_agent_enabled_var).pack(
+            anchor=tk.W, pady=4
+        )
+        tk.Label(frame, text="External agent URL").pack(anchor=tk.W, pady=(8, 0))
+        tk.Entry(frame, textvariable=external_agent_url_var).pack(anchor=tk.W, fill=tk.X)
         tk.Checkbutton(
             frame,
             text="System-wide input (paste to active app on completion)",
@@ -350,6 +365,12 @@ class VoiceInputApp:
             self.business_email_var.set(business_email_var.get())
             self.llm_enabled_var.set(llm_enabled_var.get())
             self.llm_defaults["enabled"] = bool(llm_enabled_var.get())
+            self.external_agent_enabled_var.set(external_agent_enabled_var.get())
+            self.llm_defaults["external_agent_enabled"] = bool(external_agent_enabled_var.get())
+            self.external_agent_url_var.set(
+                external_agent_url_var.get().strip() or "http://127.0.0.1:8000/v1/agent/chat"
+            )
+            self.llm_defaults["external_agent_url"] = self.external_agent_url_var.get()
             self.whisper_model_name_var.set(
                 whisper_model_name_var.get().strip() or "OpenVINO/whisper-large-v3-int8-ov"
             )
@@ -691,6 +712,9 @@ class VoiceInputApp:
                     max_input_chars=int(self.llm_defaults.get("max_input_chars", 1200)),
                     max_change_ratio=float(self.llm_defaults.get("max_change_ratio", 0.35)),
                     domain_hint=str(self.llm_defaults.get("domain_hint", "")),
+                    external_agent_enabled=bool(self.external_agent_enabled_var.get()),
+                    external_agent_url=str(self.external_agent_url_var.get()).strip()
+                    or "http://127.0.0.1:8000/v1/agent/chat",
                 ),
             )
             timings["llm"] = int((time.perf_counter() - started) * 1000)
@@ -726,7 +750,17 @@ class VoiceInputApp:
             timings["storage"] = int((time.perf_counter() - started) * 1000)
 
             self.logger.info("Pipeline timings (ms): %s", timings)
-            self.root.after(0, self._apply_results, raw, final, "", llm_result.fallback_reason, timings)
+            self.root.after(
+                0,
+                self._apply_results,
+                raw,
+                final,
+                "",
+                llm_result.fallback_reason,
+                timings,
+                bool(self.external_agent_enabled_var.get() and llm_result.applied),
+                llm_result.final_text,
+            )
         except Exception as exc:  # noqa: BLE001
             self.logger.exception("Pipeline failed")
             self.root.after(0, self._apply_results, "", "", str(exc), "", timings)
@@ -738,6 +772,8 @@ class VoiceInputApp:
         error: str,
         fallback_reason: str = "",
         timings: dict[str, int] | None = None,
+        external_agent_used: bool = False,
+        external_agent_response: str = "",
     ) -> None:
         self._stop_processing_indicator()
         self.record_button.config(state=tk.NORMAL)
@@ -749,6 +785,8 @@ class VoiceInputApp:
 
         timing_suffix = self._format_timing_suffix(timings)
         self._set_text(self.final_text, final)
+        if external_agent_used and external_agent_response.strip():
+            self._show_external_agent_response_window(external_agent_response)
         self.current_raw_text = raw
         if self.system_wide_input_var.get():
             try:
@@ -788,6 +826,42 @@ class VoiceInputApp:
         dots = "." * ((elapsed % 3) + 1)
         self.status_var.set(f"{self._processing_phase}{dots} ({elapsed}s)")
         self.root.after(250, self._tick_processing_indicator, token)
+
+    def _show_external_agent_response_window(self, text: str) -> None:
+        if self.agent_response_window is None or not self.agent_response_window.winfo_exists():
+            win = tk.Toplevel(self.root)
+            win.title("External AI Agent Response")
+            win.geometry("520x360")
+            win.transient(self.root)
+            self.agent_response_window = win
+
+            frame = tk.Frame(win, padx=10, pady=10)
+            frame.pack(fill=tk.BOTH, expand=True)
+            viewer = tk.Text(
+                frame,
+                wrap=tk.WORD,
+                bg="#0b111a",
+                fg="#dbe6f3",
+                insertbackground="#dbe6f3",
+                relief=tk.FLAT,
+                font=("Consolas", 9),
+            )
+            viewer.pack(fill=tk.BOTH, expand=True)
+            self.agent_response_text = viewer
+
+            def on_close() -> None:
+                self.agent_response_window = None
+                self.agent_response_text = None
+                win.destroy()
+
+            win.protocol("WM_DELETE_WINDOW", on_close)
+        else:
+            self.agent_response_window.deiconify()
+            self.agent_response_window.lift()
+            self.agent_response_window.focus_force()
+
+        if self.agent_response_text is not None:
+            self._set_text(self.agent_response_text, text)
 
     def _on_close(self) -> None:
         self.system_wide_input.stop()

@@ -12,7 +12,7 @@
   "whisper_download_dir": "models/whisper",
   "personal_dictionary_file": "config/personal_dictionary.json",
   "enable_system_wide_input": true,
-  "llm_enabled": true,
+  "llm_enabled": false,
   "llm_model_path": "OpenVINO/Qwen3-8B-int4-cw-ov",
   "llm_strength": "medium",
   "llm_max_input_chars": 1200,
@@ -22,5 +22,7 @@
   "llm_blocked_patterns": [],
   "llm_device": "GPU",
   "llm_auto_download": false,
-  "llm_download_dir": "models/openvino"
+  "llm_download_dir": "models/openvino",
+  "external_agent_enabled": false,
+  "external_agent_url": "http://127.0.0.1:8000/v1/agent/chat"
 }

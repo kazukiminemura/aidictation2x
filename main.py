@@ -194,7 +194,7 @@ def main() -> None:
     )
 
     llm_defaults = {
-        "enabled": bool(settings.get("llm_enabled", True)),
+        "enabled": bool(settings.get("llm_enabled", False)),
         "model_path": _resolve_model_path(
             runtime_root,
             str(settings.get("llm_model_path", "OpenVINO/Qwen3-8B-int4-cw-ov")),
@@ -209,6 +209,10 @@ def main() -> None:
         "auto_download": bool(settings.get("llm_auto_download", False)),
         "download_dir": str(
             _resolve_runtime_path(runtime_root, str(settings.get("llm_download_dir", "models/openvino")))
+        ),
+        "external_agent_enabled": bool(settings.get("external_agent_enabled", False)),
+        "external_agent_url": str(
+            settings.get("external_agent_url", "http://127.0.0.1:8000/v1/agent/chat")
         ),
     }
 
