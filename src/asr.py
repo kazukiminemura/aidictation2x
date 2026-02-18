@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -83,11 +84,72 @@ class _WhisperEngine:
             return texts
 
 
+class _QwenASREngine:
+    def __init__(self, model_name: str, device: str, compute_type: str, sample_rate_hz: int):
+        try:
+            import torch
+        except ImportError as exc:
+            raise RuntimeError("torch_not_installed") from exc
+        try:
+            from qwen_asr import Qwen3ASRModel
+        except ImportError as exc:
+            raise RuntimeError("qwen_asr_not_installed") from exc
+
+        self.sample_rate_hz = sample_rate_hz
+        self._torch = torch
+        dtype = self._resolve_dtype(device=device, compute_type=compute_type)
+        device_map = self._resolve_device_map(device=device)
+        self.model = Qwen3ASRModel.from_pretrained(
+            model_name,
+            dtype=dtype,
+            device_map=device_map,
+            max_inference_batch_size=1,
+            max_new_tokens=256,
+        )
+
+    def transcribe(self, audio_data: np.ndarray) -> str:
+        audio = np.asarray(audio_data, dtype=np.float32)
+        if audio.size == 0:
+            return ""
+
+        results = self.model.transcribe(
+            audio=(audio, self.sample_rate_hz),
+            language=None,
+        )
+        if not results:
+            return ""
+
+        first = results[0]
+        text = getattr(first, "text", "")
+        return str(text).strip()
+
+    def _resolve_dtype(self, device: str, compute_type: str):  # noqa: ANN001
+        normalized_device = (device or "auto").strip().lower()
+        normalized_compute = (compute_type or "").strip().lower()
+        if normalized_device == "cpu":
+            return self._torch.float32
+        if normalized_compute == "float32":
+            return self._torch.float32
+        if normalized_compute in {"float16", "int8_float16"}:
+            return self._torch.float16
+        return self._torch.bfloat16
+
+    def _resolve_device_map(self, device: str) -> str:
+        normalized_device = (device or "auto").strip().lower()
+        if normalized_device == "cpu":
+            return "cpu"
+        if normalized_device in {"cuda", "gpu"}:
+            return "cuda:0"
+        if self._torch.cuda.is_available():
+            return "cuda:0"
+        return "cpu"
+
+
 class ASREngine:
     def __init__(
         self,
         sample_rate_hz: int,
-        whisper_model_name: str = "OpenVINO/whisper-large-v3-int8-ov",
+        whisper_model_name: str = "Qwen/Qwen3-ASR-0.6B",
         whisper_device: str = "auto",
         whisper_compute_type: str = "int8",
         whisper_download_dir: Path | None = None,
@@ -97,7 +159,7 @@ class ASREngine:
         self.whisper_device = whisper_device
         self.whisper_compute_type = whisper_compute_type
         self.whisper_download_dir = whisper_download_dir or Path("models") / "whisper"
-        self._engine: _WhisperEngine | None = None
+        self._engine: Any | None = None
 
     def configure(
         self,
@@ -168,8 +230,16 @@ class ASREngine:
             raise RuntimeError("asr_empty_output")
         return ""
 
-    def _build_engine(self) -> _WhisperEngine:
-        model_source = self._resolve_whisper_model_source()
+    def _build_engine(self) -> Any:
+        backend = _resolve_asr_backend(self.whisper_model_name)
+        model_source = self._resolve_model_source(backend=backend)
+        if backend == "qwen":
+            return _QwenASREngine(
+                model_name=model_source,
+                device=self.whisper_device,
+                compute_type=self.whisper_compute_type,
+                sample_rate_hz=self.sample_rate_hz,
+            )
         return _WhisperEngine(
             model_name=model_source,
             device=self.whisper_device,
@@ -185,6 +255,7 @@ class ASREngine:
         if local_path.exists():
             return str(local_path)
 
+        backend = _resolve_asr_backend(target_model)
         repo_id = _resolve_whisper_repo_id(target_model)
         try:
             from huggingface_hub import snapshot_download
@@ -205,7 +276,7 @@ class ASREngine:
             snapshot_download(tqdm_class=None, **kwargs)
         except TypeError:
             snapshot_download(**kwargs)
-        if not _looks_like_openvino_model_dir(target_dir):
+        if backend == "whisper" and not _looks_like_openvino_model_dir(target_dir):
             raise RuntimeError("whisper_model_download_failed")
         self.whisper_model_name = str(target_dir)
         self._engine = None
@@ -223,19 +294,28 @@ class ASREngine:
         repo_id = _resolve_whisper_repo_id(target_model)
         return self.whisper_download_dir / repo_id.replace("/", "--")
 
-    def _resolve_whisper_model_source(self) -> str:
+    def _resolve_model_source(self, backend: str) -> str:
         model_name = (self.whisper_model_name or "").strip()
         if not model_name:
             raise RuntimeError("whisper_model_name_missing")
 
         local_model_dir = Path(model_name)
-        if _looks_like_openvino_model_dir(local_model_dir):
-            return str(local_model_dir)
+        if local_model_dir.exists():
+            if backend == "qwen":
+                return str(local_model_dir)
+            if _looks_like_openvino_model_dir(local_model_dir):
+                return str(local_model_dir)
 
         repo_id = _resolve_whisper_repo_id(model_name)
         cached_model_dir = self.whisper_download_dir / repo_id.replace("/", "--")
-        if _looks_like_openvino_model_dir(cached_model_dir):
-            return str(cached_model_dir)
+        if cached_model_dir.exists():
+            if backend == "qwen":
+                return str(cached_model_dir)
+            if _looks_like_openvino_model_dir(cached_model_dir):
+                return str(cached_model_dir)
+
+        if backend == "qwen":
+            return repo_id
 
         # Fallback: auto-download when no local model is available.
         try:
@@ -246,7 +326,7 @@ class ASREngine:
             raise RuntimeError(f"whisper_model_download_failed: {exc}") from exc
 
         raise RuntimeError(
-            "whisper_model_not_found. Please pre-download from Properties -> Download ASR Model (Whisper)."
+            "whisper_model_not_found. Please pre-download from Properties -> Download ASR Model."
         )
 
 
@@ -262,6 +342,13 @@ def _resolve_whisper_repo_id(model_name: str) -> str:
         return _WHISPER_MODEL_REPOS[model]
 
     return f"OpenVINO/whisper-{model}"
+
+
+def _resolve_asr_backend(model_name: str) -> str:
+    normalized = (model_name or "").strip().lower()
+    if "qwen3-asr" in normalized or normalized.startswith("qwen/"):
+        return "qwen"
+    return "whisper"
 
 
 def _to_openvino_device(device: str) -> str:

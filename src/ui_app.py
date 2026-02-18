@@ -16,6 +16,11 @@ from .storage import Storage
 from .system_wide_input import SystemWideInput
 from .text_processing import ProcessOptions, process_text
 
+ASR_MODEL_CHOICES = (
+    "Qwen/Qwen3-ASR-1.7B",
+    "Qwen/Qwen3-ASR-0.6B",
+)
+
 
 class VoiceInputApp:
     def __init__(
@@ -60,7 +65,7 @@ class VoiceInputApp:
             value=str(self.llm_defaults.get("external_agent_url", "http://127.0.0.1:8000/v1/agent/chat"))
         )
         self.whisper_model_name_var = tk.StringVar(
-            value=str(self.asr_defaults.get("whisper_model_name", "OpenVINO/whisper-large-v3-int8-ov"))
+            value=str(self.asr_defaults.get("whisper_model_name", "Qwen/Qwen3-ASR-0.6B"))
         )
         self.whisper_device_var = tk.StringVar(value=str(self.asr_defaults.get("whisper_device", "auto")))
         self.whisper_compute_type_var = tk.StringVar(
@@ -387,11 +392,16 @@ class VoiceInputApp:
             text="System-wide input (paste to active app on completion)",
             variable=system_wide_var,
         ).pack(anchor=tk.W, pady=4)
-        tk.Label(frame, text="Whisper model name").pack(anchor=tk.W, pady=(8, 0))
-        tk.Entry(frame, textvariable=whisper_model_name_var).pack(anchor=tk.W, fill=tk.X)
-        tk.Label(frame, text="Whisper device").pack(anchor=tk.W, pady=(8, 0))
+        tk.Label(frame, text="ASR model name").pack(anchor=tk.W, pady=(8, 0))
+        ttk.Combobox(
+            frame,
+            textvariable=whisper_model_name_var,
+            values=ASR_MODEL_CHOICES,
+            state="normal",
+        ).pack(anchor=tk.W, fill=tk.X)
+        tk.Label(frame, text="ASR device").pack(anchor=tk.W, pady=(8, 0))
         tk.OptionMenu(frame, whisper_device_var, "auto", "cpu", "cuda").pack(anchor=tk.W, fill=tk.X)
-        tk.Label(frame, text="Whisper compute type").pack(anchor=tk.W, pady=(8, 0))
+        tk.Label(frame, text="ASR compute type").pack(anchor=tk.W, pady=(8, 0))
         tk.OptionMenu(
             frame,
             whisper_compute_type_var,
@@ -402,7 +412,7 @@ class VoiceInputApp:
         ).pack(anchor=tk.W, fill=tk.X)
         tk.Button(
             frame,
-            text="Download ASR Model (Whisper)",
+            text="Download ASR Model",
             command=lambda: download_asr_model_from_dialog(),
             bg="#1f6feb",
             fg="#ffffff",
@@ -476,7 +486,7 @@ class VoiceInputApp:
         self._refresh_dictionary_list()
 
         def download_asr_model_from_dialog() -> None:
-            model_name = whisper_model_name_var.get().strip() or "OpenVINO/whisper-large-v3-int8-ov"
+            model_name = whisper_model_name_var.get().strip() or "Qwen/Qwen3-ASR-0.6B"
             device = whisper_device_var.get().strip() or "auto"
             compute_type = whisper_compute_type_var.get().strip() or "int8"
             self._download_asr_model_clicked(
@@ -507,7 +517,7 @@ class VoiceInputApp:
             )
             self.llm_defaults["autonomous_agent_external_url"] = self.autonomous_agent_external_url_var.get()
             self.whisper_model_name_var.set(
-                whisper_model_name_var.get().strip() or "OpenVINO/whisper-large-v3-int8-ov"
+                whisper_model_name_var.get().strip() or "Qwen/Qwen3-ASR-0.6B"
             )
             self.whisper_device_var.set(whisper_device_var.get())
             self.whisper_compute_type_var.set(whisper_compute_type_var.get())
@@ -562,7 +572,7 @@ class VoiceInputApp:
 
     def _apply_asr_settings(self) -> None:
         whisper_model_name = (
-            self.whisper_model_name_var.get().strip() or "OpenVINO/whisper-large-v3-int8-ov"
+            self.whisper_model_name_var.get().strip() or "Qwen/Qwen3-ASR-0.6B"
         )
         whisper_device = self.whisper_device_var.get().strip() or "auto"
         whisper_compute_type = self.whisper_compute_type_var.get().strip() or "int8"
@@ -713,6 +723,16 @@ class VoiceInputApp:
             return (
                 "Model download failed.\n"
                 "Please check network/proxy/firewall settings and try again."
+            )
+        if "qwen_asr_not_installed" in raw:
+            return (
+                "Qwen ASR backend (qwen-asr) is missing.\n"
+                "Install dependencies with 'pip install -r requirements.txt'."
+            )
+        if "torch_not_installed" in raw:
+            return (
+                "PyTorch is missing for Qwen ASR backend.\n"
+                "Install dependencies with 'pip install -r requirements.txt'."
             )
         return raw
 
@@ -1096,13 +1116,17 @@ class VoiceInputApp:
         if "asr_empty_output" in normalized:
             return (
                 "ASR could not produce text from this audio.\n"
-                "Check microphone input level and Whisper model readiness, then retry."
+                "Check microphone input level and ASR model readiness, then retry."
             )
         if "asr_failed_all_windows" in normalized:
             return (
                 "ASR failed on all audio windows.\n"
-                "Try a shorter recording and switch Whisper device (auto/cpu) in Properties."
+                "Try a shorter recording and switch ASR device (auto/cpu) in Properties."
             )
+        if "qwen_asr_not_installed" in normalized:
+            return "Qwen ASR backend is not installed. Run: pip install -r requirements.txt"
+        if "torch_not_installed" in normalized:
+            return "PyTorch is not installed. Run: pip install -r requirements.txt"
         if "vector too long" in raw.lower():
             return (
                 "Audio segment is too long for one-pass transcription.\n"
@@ -1124,7 +1148,7 @@ def build_app(
 ) -> VoiceInputApp:
     engine = ASREngine(
         sample_rate_hz=audio_config.sample_rate_hz,
-        whisper_model_name=str(asr_defaults.get("whisper_model_name", "OpenVINO/whisper-large-v3-int8-ov")),
+        whisper_model_name=str(asr_defaults.get("whisper_model_name", "Qwen/Qwen3-ASR-0.6B")),
         whisper_device=str(asr_defaults.get("whisper_device", "auto")),
         whisper_compute_type=str(asr_defaults.get("whisper_compute_type", "int8")),
         whisper_download_dir=root_dir / str(asr_defaults.get("whisper_download_dir", "models/whisper")),

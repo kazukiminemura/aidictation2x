@@ -182,7 +182,7 @@ def main() -> None:
     )
 
     asr_defaults = {
-        "whisper_model_name": str(settings.get("whisper_model_name", "OpenVINO/whisper-large-v3-int8-ov")),
+        "whisper_model_name": str(settings.get("whisper_model_name", "Qwen/Qwen3-ASR-0.6B")),
         "whisper_device": str(settings.get("whisper_device", "auto")),
         "whisper_compute_type": str(settings.get("whisper_compute_type", "int8")),
         "whisper_download_dir": str(

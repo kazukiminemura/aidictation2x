@@ -1,12 +1,12 @@
 ﻿# AI Dictation 2x (ASR + OpenVINO LLM)
 
-This app records microphone audio, runs local ASR (Whisper), applies text cleanup rules,
+This app records microphone audio, runs local ASR (Whisper / Qwen3-ASR), applies text cleanup rules,
 and then post-edits text with a local OpenVINO LLM backend.
 
 ## Features
 - Push-to-talk recording (`Ctrl+Space`)
 - Optional system-wide paste (`Ctrl+Shift+Space`)
-- Local ASR (Whisper)
+- Local ASR (Whisper / Qwen3-ASR-1.7B)
 - Rule-based cleanup (fillers, habits, punctuation)
 - Personal dictionary (reading -> surface)
 - Local OpenVINO LLM post-edit with quality gate and fallback
@@ -72,13 +72,14 @@ powershell -ExecutionPolicy Bypass -File .\build\windows\build.ps1 -Version 0.1.
 
 ## ASR settings
 `config/app_settings.json` keys:
-- `whisper_model_name` (default: `OpenVINO/whisper-large-v3-int8-ov`)
+- `whisper_model_name` (default: `Qwen/Qwen3-ASR-0.6B`, `Qwen/Qwen3-ASR-1.7B` / Whisper modelsも選択可)
 - `whisper_device` (`auto` | `cpu` | `cuda`)
 - `whisper_download_dir` (pre-download destination for Whisper models)
 
 You can switch ASR model from `Properties...` in the app.
-Use `Download ASR Model (Whisper)` in `Properties...` to pre-download before recording.
+Use `Download ASR Model` in `Properties...` to pre-download before recording.
 Whisper ASR uses OpenVINO (`openvino_genai.WhisperPipeline`) and expects an OpenVINO-converted model directory.
+Qwen3-ASR uses `qwen-asr` + `torch` backend and supports `Qwen/Qwen3-ASR-1.7B` and `Qwen/Qwen3-ASR-0.6B`.
 
 ## UI options
 - Right-click anywhere in the main window and open `Properties...`
