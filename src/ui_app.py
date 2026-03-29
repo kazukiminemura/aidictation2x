@@ -1,5 +1,4 @@
 ﻿import logging
-import subprocess
 import threading
 import tkinter as tk
 import time
@@ -15,6 +14,7 @@ from .business_email import to_business_email
 from .llm_post_editor import LLMOptions, LLMPostEditor
 from .personal_dictionary import PersonalDictionary
 from .storage import Storage
+from .app_launcher import AppLauncher
 from .continuous_listener import ContinuousListener
 from .system_wide_input import SystemWideInput
 from .text_processing import ProcessOptions, process_text
@@ -124,6 +124,7 @@ class VoiceInputApp:
             on_voice_start=lambda: self.root.after(0, self.status_var.set, "Speaking..."),
             voice_threshold=float(self.voice_threshold_var.get()),
         )
+        self.app_launcher = AppLauncher()
 
         self._build_ui()
         self._bind_hotkeys()
@@ -1015,27 +1016,35 @@ class VoiceInputApp:
             self._open_properties_dialog()
             self.status_var.set("プロパティを開きました")
 
-        elif cmd.action == "open_app":
-            self._open_app(cmd.args.get("app", ""))
+        elif cmd.action == "launch_any":
+            query = cmd.args.get("query", "")
+            threading.Thread(target=self._launch_app_worker, args=(query,), daemon=True).start()
 
-    def _open_app(self, app: str) -> None:
-        _APP_COMMANDS = {
-            "powerpoint": ["powerpnt"],
-            "excel": ["excel"],
-            "word": ["winword"],
-            "browser": ["start", ""],
-        }
-        args = _APP_COMMANDS.get(app)
-        if args is None:
-            self.status_var.set(f"不明なアプリ: {app}")
-            return
+        elif cmd.action == "close_app":
+            query = cmd.args.get("query", "")
+            threading.Thread(target=self._close_app_worker, args=(query,), daemon=True).start()
+
+    def _launch_app_worker(self, query: str) -> None:
         try:
-            subprocess.Popen(args, shell=True)
-            label = {"powerpoint": "PowerPoint", "excel": "Excel", "word": "Word", "browser": "ブラウザ"}.get(app, app)
-            self.status_var.set(f"{label} を起動しました")
+            label = self.app_launcher.launch(query)
+            self.root.after(0, self.status_var.set, f"{label} を起動しました")
+        except ValueError:
+            self.root.after(0, self.status_var.set, f"アプリが見つかりません: {query}")
         except Exception as exc:  # noqa: BLE001
-            self.logger.exception("Failed to open app: %s", app)
-            self.status_var.set(f"起動エラー: {exc}")
+            self.logger.exception("Failed to launch app: %s", query)
+            self.root.after(0, self.status_var.set, f"起動エラー: {exc}")
+
+    def _close_app_worker(self, query: str) -> None:
+        try:
+            label = self.app_launcher.close(query)
+            self.root.after(0, self.status_var.set, f"{label} を終了しました")
+        except ValueError:
+            self.root.after(0, self.status_var.set, f"アプリが見つかりません: {query}")
+        except RuntimeError as exc:
+            self.root.after(0, self.status_var.set, str(exc))
+        except Exception as exc:  # noqa: BLE001
+            self.logger.exception("Failed to close app: %s", query)
+            self.root.after(0, self.status_var.set, f"終了エラー: {exc}")
 
     def _apply_results(
         self,
