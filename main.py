@@ -210,14 +210,6 @@ def main() -> None:
         "download_dir": str(
             _resolve_runtime_path(runtime_root, str(settings.get("llm_download_dir", "models/openvino")))
         ),
-        "external_agent_enabled": bool(settings.get("external_agent_enabled", False)),
-        "external_agent_url": str(
-            settings.get("external_agent_url", "http://127.0.0.1:8000/v1/agent/chat")
-        ),
-        "autonomous_agent_mode": str(settings.get("autonomous_agent_mode", "internal")),
-        "autonomous_agent_external_url": str(
-            settings.get("autonomous_agent_external_url", "http://127.0.0.1:8000/v1/agent/run")
-        ),
     }
 
     root = tk.Tk()

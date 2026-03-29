@@ -11,6 +11,7 @@ import sounddevice as sd
 class AudioConfig:
     sample_rate_hz: int = 16000
     channels: int = 1
+    device: "int | str | None" = None
 
 
 class AudioRecorder:
@@ -38,12 +39,15 @@ class AudioRecorder:
 
         with self._lock:
             self._audio_queue = queue.Queue()
-            self._stream = sd.InputStream(
-                samplerate=self.config.sample_rate_hz,
-                channels=self.config.channels,
-                dtype="float32",
-                callback=callback,
-            )
+            kwargs: dict = {
+                "samplerate": self.config.sample_rate_hz,
+                "channels": self.config.channels,
+                "dtype": "float32",
+                "callback": callback,
+            }
+            if self.config.device is not None:
+                kwargs["device"] = self.config.device
+            self._stream = sd.InputStream(**kwargs)
             self._stream.start()
             self._is_recording = True
 

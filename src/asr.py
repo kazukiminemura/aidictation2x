@@ -215,19 +215,9 @@ class ASREngine:
                     raise
                 if text:
                     texts.append(text)
-            joined = " ".join(texts).strip()
-            if joined:
-                return joined
-            if _has_voice(audio):
-                if failed_windows > 0:
-                    raise RuntimeError("asr_failed_all_windows")
-                raise RuntimeError("asr_empty_output")
-            return ""
+            return " ".join(texts).strip()
         if text:
             return text
-        audio = np.asarray(audio_data, dtype=np.float32)
-        if _has_voice(audio):
-            raise RuntimeError("asr_empty_output")
         return ""
 
     def _build_engine(self) -> Any:
@@ -357,7 +347,10 @@ def _to_openvino_device(device: str) -> str:
         return "CPU"
     if normalized in {"gpu", "cuda"}:
         return "GPU"
-    return "AUTO"
+    if normalized == "npu":
+        return "NPU"
+    # auto: try NPU first, then GPU, then CPU
+    return "AUTO:NPU,GPU,CPU"
 
 
 def _looks_like_openvino_model_dir(path: Path) -> bool:

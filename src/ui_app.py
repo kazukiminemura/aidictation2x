@@ -1,4 +1,5 @@
 ﻿import logging
+import subprocess
 import threading
 import tkinter as tk
 import time
@@ -6,20 +7,47 @@ from pathlib import Path
 from tkinter import messagebox
 from tkinter import ttk
 
+import sounddevice as sd
+
 from .asr import ASREngine
-from .autonomous_agent import AutonomousAgentResult, ExternalAPIAutonomousAgent, InternalAutonomousAgent
 from .audio_capture import AudioConfig, AudioRecorder
 from .business_email import to_business_email
 from .llm_post_editor import LLMOptions, LLMPostEditor
 from .personal_dictionary import PersonalDictionary
 from .storage import Storage
+from .continuous_listener import ContinuousListener
 from .system_wide_input import SystemWideInput
 from .text_processing import ProcessOptions, process_text
+from .voice_commands import VoiceCommand, detect_voice_command
 
 ASR_MODEL_CHOICES = (
     "Qwen/Qwen3-ASR-1.7B",
     "Qwen/Qwen3-ASR-0.6B",
 )
+
+
+def _get_input_device_choices() -> list[str]:
+    """Return list of 'index: name' strings for all input devices."""
+    choices = ["auto (system default)"]
+    try:
+        devices = sd.query_devices()
+        for i, dev in enumerate(devices):
+            if dev["max_input_channels"] > 0:
+                choices.append(f"{i}: {dev['name']}")
+    except Exception:  # noqa: BLE001
+        pass
+    return choices
+
+
+def _parse_device_choice(value: str) -> "int | None":
+    """Parse a device choice string back to an int index (or None for auto)."""
+    v = (value or "").strip()
+    if not v or v.startswith("auto"):
+        return None
+    try:
+        return int(v.split(":")[0])
+    except (ValueError, IndexError):
+        return None
 
 
 class VoiceInputApp:
@@ -58,12 +86,6 @@ class VoiceInputApp:
         self.current_raw_text = ""
         self.hotkey_pressed = False
         self.llm_enabled_var = tk.BooleanVar(value=bool(self.llm_defaults.get("enabled", False)))
-        self.external_agent_enabled_var = tk.BooleanVar(
-            value=bool(self.llm_defaults.get("external_agent_enabled", False))
-        )
-        self.external_agent_url_var = tk.StringVar(
-            value=str(self.llm_defaults.get("external_agent_url", "http://127.0.0.1:8000/v1/agent/chat"))
-        )
         self.whisper_model_name_var = tk.StringVar(
             value=str(self.asr_defaults.get("whisper_model_name", "Qwen/Qwen3-ASR-0.6B"))
         )
@@ -71,31 +93,36 @@ class VoiceInputApp:
         self.whisper_compute_type_var = tk.StringVar(
             value=str(self.asr_defaults.get("whisper_compute_type", "int8"))
         )
+        # Audio input device: store as "index: name" string or "auto (system default)"
+        _saved_device = self.asr_defaults.get("audio_input_device", None)
+        self.audio_device_var = tk.StringVar(value=str(_saved_device) if _saved_device else "auto (system default)")
+        self.voice_threshold_var = tk.StringVar(
+            value=str(self.asr_defaults.get("voice_threshold", "0.02"))
+        )
         self.properties_window: tk.Toplevel | None = None
-        self.agent_response_text: tk.Text | None = None
-        self.rest_response_text: tk.Text | None = None
-        self.agent_goal_var = tk.StringVar(value="")
-        self.agent_run_button: tk.Button | None = None
-        self._agent_running = False
-        self.autonomous_agent_mode_var = tk.StringVar(
-            value=str(self.llm_defaults.get("autonomous_agent_mode", "internal"))
-        )
-        self.autonomous_agent_external_url_var = tk.StringVar(
-            value=str(self.llm_defaults.get("autonomous_agent_external_url", "http://127.0.0.1:8000/v1/agent/run"))
-        )
         self.asr_text: tk.Text | None = None
         self.dict_reading_entry: tk.Entry | None = None
         self.dict_surface_entry: tk.Entry | None = None
         self.dict_list: tk.Listbox | None = None
         self.dict_entries = []
         self._processing_active = False
+        self._processing_lock = threading.Lock()
         self._processing_started = 0.0
         self._processing_phase = "Processing"
         self._processing_tick_token = 0
+        self._continuous_mode_active = False
+        self.continuous_button: tk.Button | None = None
 
         self.system_wide_input = SystemWideInput(
             dispatch_on_ui=lambda cb: self.root.after(0, cb),
             on_toggle=self.toggle_recording,
+        )
+
+        self.continuous_listener = ContinuousListener(
+            config=self.recorder.config,
+            on_utterance=self._on_continuous_utterance,
+            on_voice_start=lambda: self.root.after(0, self.status_var.set, "Speaking..."),
+            voice_threshold=float(self.voice_threshold_var.get()),
         )
 
         self._build_ui()
@@ -156,6 +183,22 @@ class VoiceInputApp:
         )
         self.record_button.pack(side=tk.LEFT)
 
+        self.continuous_button = tk.Button(
+            controls,
+            text="Continuous",
+            command=self._toggle_continuous,
+            bg="#2ea043",
+            fg="#ffffff",
+            activebackground="#3fb950",
+            activeforeground="#ffffff",
+            relief=tk.FLAT,
+            padx=10,
+            pady=6,
+            font=("Consolas", 10, "bold"),
+            cursor="hand2",
+        )
+        self.continuous_button.pack(side=tk.LEFT, padx=(8, 0))
+
         tk.Label(
             controls,
             text="Right-click to open Properties",
@@ -173,6 +216,14 @@ class VoiceInputApp:
             bg="#0a0e14",
             anchor="w",
             font=("Consolas", 9),
+        ).pack(fill=tk.X)
+        tk.Label(
+            system_frame,
+            text="Voice cmds: クリア / コピー / プロパティ / 辞書登録 [読み] [表記] / 辞書削除 [読み]",
+            fg="#5a7a9b",
+            bg="#0a0e14",
+            anchor="w",
+            font=("Consolas", 8),
         ).pack(fill=tk.X)
 
         output_title = tk.Label(
@@ -209,17 +260,11 @@ class VoiceInputApp:
 
         asr_tab = tk.Frame(tabs, bg="#0a0e14")
         final_tab = tk.Frame(tabs, bg="#0a0e14")
-        agent_tab = tk.Frame(tabs, bg="#0a0e14")
-        rest_tab = tk.Frame(tabs, bg="#0a0e14")
         tabs.add(asr_tab, text="ASR Text")
         tabs.add(final_tab, text="Final")
-        tabs.add(agent_tab, text="AI Agent")
-        tabs.add(rest_tab, text="REST Raw")
         tab_selected_colors = {
             0: "#14532d",  # ASR Text
             1: "#1d4ed8",  # Final
-            2: "#7c2d12",  # AI Agent
-            3: "#4c1d95",  # REST Raw
         }
 
         def apply_selected_tab_color() -> None:
@@ -260,64 +305,6 @@ class VoiceInputApp:
             font=("Consolas", 9),
         )
         self.final_text.pack(fill=tk.BOTH, expand=True)
-
-        agent_controls = tk.Frame(agent_tab, bg="#0a0e14")
-        agent_controls.pack(fill=tk.X, pady=(0, 6))
-        tk.Label(
-            agent_controls,
-            text="Goal",
-            fg="#8b9fb6",
-            bg="#0a0e14",
-            font=("Consolas", 9, "bold"),
-        ).pack(side=tk.LEFT, padx=(0, 6))
-        tk.Entry(
-            agent_controls,
-            textvariable=self.agent_goal_var,
-            bg="#0b111a",
-            fg="#dbe6f3",
-            insertbackground="#dbe6f3",
-            relief=tk.FLAT,
-            font=("Consolas", 9),
-        ).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
-        self.agent_run_button = tk.Button(
-            agent_controls,
-            text="Run Agent",
-            command=self._run_autonomous_agent_clicked,
-            bg="#7c2d12",
-            fg="#ffffff",
-            activebackground="#9a3412",
-            activeforeground="#ffffff",
-            relief=tk.FLAT,
-            padx=10,
-            pady=4,
-            font=("Consolas", 9, "bold"),
-            cursor="hand2",
-        )
-        self.agent_run_button.pack(side=tk.LEFT)
-
-        self.agent_response_text = tk.Text(
-            agent_tab,
-            height=18,
-            wrap=tk.WORD,
-            bg="#0b111a",
-            fg="#dbe6f3",
-            insertbackground="#dbe6f3",
-            relief=tk.FLAT,
-            font=("Consolas", 9),
-        )
-        self.agent_response_text.pack(fill=tk.BOTH, expand=True)
-
-        self.rest_response_text = tk.Text(
-            rest_tab,
-            height=18,
-            wrap=tk.WORD,
-            bg="#0b111a",
-            fg="#dbe6f3",
-            insertbackground="#dbe6f3",
-            relief=tk.FLAT,
-            font=("Consolas", 9),
-        )
-        self.rest_response_text.pack(fill=tk.BOTH, expand=True)
 
     def _load_initial_state(self) -> None:
         auto = self.storage.load_autosave()
@@ -362,13 +349,11 @@ class VoiceInputApp:
         business_email_var = tk.BooleanVar(value=self.business_email_var.get())
         system_wide_var = tk.BooleanVar(value=self.system_wide_input_var.get())
         llm_enabled_var = tk.BooleanVar(value=self.llm_enabled_var.get())
-        external_agent_enabled_var = tk.BooleanVar(value=self.external_agent_enabled_var.get())
-        external_agent_url_var = tk.StringVar(value=self.external_agent_url_var.get())
-        autonomous_agent_mode_var = tk.StringVar(value=self.autonomous_agent_mode_var.get())
-        autonomous_agent_external_url_var = tk.StringVar(value=self.autonomous_agent_external_url_var.get())
         whisper_model_name_var = tk.StringVar(value=self.whisper_model_name_var.get())
         whisper_device_var = tk.StringVar(value=self.whisper_device_var.get())
         whisper_compute_type_var = tk.StringVar(value=self.whisper_compute_type_var.get())
+        audio_device_var = tk.StringVar(value=self.audio_device_var.get())
+        voice_threshold_var = tk.StringVar(value=self.voice_threshold_var.get())
 
         frame = tk.Frame(win, padx=12, pady=12)
         frame.pack(fill=tk.BOTH, expand=True)
@@ -378,20 +363,21 @@ class VoiceInputApp:
         tk.Checkbutton(frame, text="Remove habits", variable=remove_habits_var).pack(anchor=tk.W, pady=4)
         tk.Checkbutton(frame, text="Convert to business email", variable=business_email_var).pack(anchor=tk.W, pady=4)
         tk.Checkbutton(frame, text="Enable LLM correction", variable=llm_enabled_var).pack(anchor=tk.W, pady=4)
-        tk.Checkbutton(frame, text="Use external AI agent", variable=external_agent_enabled_var).pack(
-            anchor=tk.W, pady=4
-        )
-        tk.Label(frame, text="External agent URL").pack(anchor=tk.W, pady=(8, 0))
-        tk.Entry(frame, textvariable=external_agent_url_var).pack(anchor=tk.W, fill=tk.X)
-        tk.Label(frame, text="Autonomous agent mode").pack(anchor=tk.W, pady=(8, 0))
-        tk.OptionMenu(frame, autonomous_agent_mode_var, "internal", "external_api").pack(anchor=tk.W, fill=tk.X)
-        tk.Label(frame, text="Autonomous external API URL").pack(anchor=tk.W, pady=(8, 0))
-        tk.Entry(frame, textvariable=autonomous_agent_external_url_var).pack(anchor=tk.W, fill=tk.X)
         tk.Checkbutton(
             frame,
             text="System-wide input (paste to active app on completion)",
             variable=system_wide_var,
         ).pack(anchor=tk.W, pady=4)
+        tk.Label(frame, text="Audio input device").pack(anchor=tk.W, pady=(8, 0))
+        device_choices = _get_input_device_choices()
+        ttk.Combobox(
+            frame,
+            textvariable=audio_device_var,
+            values=device_choices,
+            state="readonly",
+        ).pack(anchor=tk.W, fill=tk.X)
+        tk.Label(frame, text="Voice threshold (Continuous mode: increase if silence not detected, e.g. 0.01-0.1)").pack(anchor=tk.W, pady=(8, 0))
+        tk.Entry(frame, textvariable=voice_threshold_var, width=10).pack(anchor=tk.W)
         tk.Label(frame, text="ASR model name").pack(anchor=tk.W, pady=(8, 0))
         ttk.Combobox(
             frame,
@@ -400,7 +386,7 @@ class VoiceInputApp:
             state="normal",
         ).pack(anchor=tk.W, fill=tk.X)
         tk.Label(frame, text="ASR device").pack(anchor=tk.W, pady=(8, 0))
-        tk.OptionMenu(frame, whisper_device_var, "auto", "cpu", "cuda").pack(anchor=tk.W, fill=tk.X)
+        tk.OptionMenu(frame, whisper_device_var, "auto", "npu", "gpu", "cpu", "cuda").pack(anchor=tk.W, fill=tk.X)
         tk.Label(frame, text="ASR compute type").pack(anchor=tk.W, pady=(8, 0))
         tk.OptionMenu(
             frame,
@@ -502,26 +488,29 @@ class VoiceInputApp:
             self.business_email_var.set(business_email_var.get())
             self.llm_enabled_var.set(llm_enabled_var.get())
             self.llm_defaults["enabled"] = bool(llm_enabled_var.get())
-            self.external_agent_enabled_var.set(external_agent_enabled_var.get())
-            self.llm_defaults["external_agent_enabled"] = bool(external_agent_enabled_var.get())
-            self.external_agent_url_var.set(
-                external_agent_url_var.get().strip() or "http://127.0.0.1:8000/v1/agent/chat"
-            )
-            self.llm_defaults["external_agent_url"] = self.external_agent_url_var.get()
-            self.autonomous_agent_mode_var.set(
-                autonomous_agent_mode_var.get().strip() or "internal"
-            )
-            self.llm_defaults["autonomous_agent_mode"] = self.autonomous_agent_mode_var.get()
-            self.autonomous_agent_external_url_var.set(
-                autonomous_agent_external_url_var.get().strip() or "http://127.0.0.1:8000/v1/agent/run"
-            )
-            self.llm_defaults["autonomous_agent_external_url"] = self.autonomous_agent_external_url_var.get()
             self.whisper_model_name_var.set(
                 whisper_model_name_var.get().strip() or "Qwen/Qwen3-ASR-0.6B"
             )
             self.whisper_device_var.set(whisper_device_var.get())
             self.whisper_compute_type_var.set(whisper_compute_type_var.get())
             self._apply_asr_settings()
+
+            # Apply audio input device
+            chosen_device = audio_device_var.get()
+            self.audio_device_var.set(chosen_device)
+            self.asr_defaults["audio_input_device"] = chosen_device
+            new_device_idx = _parse_device_choice(chosen_device)
+            self.recorder.config.device = new_device_idx
+
+            # Apply voice threshold
+            try:
+                new_threshold = float(voice_threshold_var.get())
+                if new_threshold > 0:
+                    self.voice_threshold_var.set(str(new_threshold))
+                    self.asr_defaults["voice_threshold"] = new_threshold
+                    self.continuous_listener.voice_threshold = new_threshold
+            except ValueError:
+                pass
 
             before = self.system_wide_input_var.get()
             after = system_wide_var.get()
@@ -775,82 +764,6 @@ class VoiceInputApp:
         minutes, seconds = divmod(max(0, elapsed_s), 60)
         return f"{minutes:02d}:{seconds:02d}"
 
-    def _run_autonomous_agent_clicked(self) -> None:
-        if self._agent_running:
-            return
-        goal = self.agent_goal_var.get().strip()
-        if not goal:
-            messagebox.showwarning("Goal missing", "Please input an autonomous-agent goal.")
-            return
-        self._agent_running = True
-        if self.agent_run_button is not None:
-            self.agent_run_button.config(state=tk.DISABLED)
-        self.status_var.set("Autonomous agent running...")
-        mode = (self.autonomous_agent_mode_var.get() or "internal").strip()
-        endpoint = (self.autonomous_agent_external_url_var.get() or "").strip()
-        threading.Thread(
-            target=self._run_autonomous_agent_worker,
-            args=(goal, mode, endpoint),
-            daemon=True,
-        ).start()
-
-    def _run_autonomous_agent_worker(self, goal: str, mode: str, endpoint: str) -> None:
-        try:
-            if mode == "external_api":
-                agent = ExternalAPIAutonomousAgent(endpoint_url=endpoint or "http://127.0.0.1:8000/v1/agent/run")
-                result = agent.run(goal=goal, workspace_root=self.root_dir)
-            else:
-                agent = InternalAutonomousAgent(workspace_root=self.root_dir)
-                result = agent.run(goal=goal)
-            self.root.after(0, self._on_autonomous_agent_done, result, "")
-        except Exception as exc:  # noqa: BLE001
-            self.logger.exception("Autonomous agent failed")
-            self.root.after(0, self._on_autonomous_agent_done, None, str(exc))
-
-    def _on_autonomous_agent_done(self, result: AutonomousAgentResult | None, error: str) -> None:
-        self._agent_running = False
-        if self.agent_run_button is not None:
-            self.agent_run_button.config(state=tk.NORMAL)
-
-        if error:
-            self.status_var.set("Autonomous agent failed")
-            messagebox.showerror("Autonomous agent error", error)
-            return
-        if result is None:
-            self.status_var.set("Autonomous agent failed")
-            messagebox.showerror("Autonomous agent error", "Unknown error")
-            return
-
-        self.status_var.set(f"Autonomous agent done ({result.mode})")
-        if self.agent_response_text is not None:
-            self._set_text(self.agent_response_text, self._format_agent_result(result))
-        if self.rest_response_text is not None:
-            self._set_text(self.rest_response_text, result.external_raw_response or "")
-
-    @staticmethod
-    def _format_agent_result(result: AutonomousAgentResult) -> str:
-        lines = [
-            f"Goal: {result.goal}",
-            f"Mode: {result.mode}",
-            f"Success: {result.success}",
-            f"Summary: {result.summary}",
-            "",
-            "Steps:",
-        ]
-        for step in result.steps:
-            output = f" -> {step.output_path}" if step.output_path else ""
-            detail = f" ({step.detail})" if step.detail else ""
-            lines.append(f"- {step.name}: {step.status}{detail}{output}")
-        if result.artifact_paths:
-            lines.append("")
-            lines.append("Artifacts:")
-            for path in result.artifact_paths:
-                lines.append(f"- {path}")
-        if result.report_path:
-            lines.append("")
-            lines.append(f"Report: {result.report_path}")
-        return "\n".join(lines)
-
     def _refresh_dictionary_list(self) -> None:
         if self.dict_list is None or not self.dict_list.winfo_exists():
             return
@@ -896,6 +809,53 @@ class VoiceInputApp:
         self._refresh_dictionary_list()
         self.status_var.set("Dictionary removed")
 
+    # ------------------------------------------------------------------
+    # Continuous (real-time VAD) mode
+    # ------------------------------------------------------------------
+
+    def _toggle_continuous(self) -> None:
+        if self._continuous_mode_active:
+            self._stop_continuous()
+        else:
+            self._start_continuous()
+
+    def _start_continuous(self) -> None:
+        try:
+            self.continuous_listener.start()
+        except Exception as exc:  # noqa: BLE001
+            messagebox.showerror("Continuous mode error", str(exc))
+            self.logger.exception("Failed to start continuous listener")
+            return
+        self._continuous_mode_active = True
+        self.record_button.config(state=tk.DISABLED)
+        if self.continuous_button is not None:
+            self.continuous_button.config(text="Stop Continuous", bg="#b62324", activebackground="#d73a49")
+        self.status_var.set("Listening...")
+
+    def _stop_continuous(self) -> None:
+        self.continuous_listener.stop()
+        self._continuous_mode_active = False
+        self.record_button.config(state=tk.NORMAL)
+        if self.continuous_button is not None:
+            self.continuous_button.config(text="Continuous", bg="#2ea043", activebackground="#3fb950")
+        self.status_var.set("Ready (Ctrl+Space / Ctrl+Shift+Space)")
+
+    def _on_continuous_utterance(self, audio_data) -> None:  # noqa: ANN001
+        """Called from ContinuousListener background thread when an utterance ends."""
+        if not self._processing_lock.acquire(blocking=False):
+            # Already processing a previous utterance; skip this one
+            self.root.after(0, self.status_var.set, "Listening... (busy, skipped)")
+            return
+        try:
+            self.root.after(0, self._start_processing_indicator, "Transcribing")
+            self._transcribe_and_process(audio_data)
+        finally:
+            self._processing_lock.release()
+            if self._continuous_mode_active:
+                self.root.after(0, self.status_var.set, "Listening...")
+
+    # ------------------------------------------------------------------
+
     def toggle_recording(self) -> None:
         if not self.recorder.is_recording:
             try:
@@ -931,6 +891,15 @@ class VoiceInputApp:
             raw_asr = self.asr_engine.transcribe(audio_data)
             timings["asr"] = int((time.perf_counter() - started) * 1000)
 
+            if not raw_asr and self._continuous_mode_active:
+                self.root.after(0, self._stop_processing_indicator)
+                return
+
+            cmd = detect_voice_command(raw_asr)
+            if cmd is not None:
+                self.root.after(0, self._execute_voice_command, cmd)
+                return
+
             started = time.perf_counter()
             raw = self.personal_dictionary.apply(raw_asr)
             timings["dictionary"] = int((time.perf_counter() - started) * 1000)
@@ -952,14 +921,11 @@ class VoiceInputApp:
                 raw_text=raw_asr,
                 preprocessed_text=process_result.final_text,
                 options=LLMOptions(
-                    enabled=bool(self.llm_enabled_var.get() or self.external_agent_enabled_var.get()),
+                    enabled=bool(self.llm_enabled_var.get()),
                     strength=str(self.llm_defaults.get("strength", "medium")),
                     max_input_chars=int(self.llm_defaults.get("max_input_chars", 1200)),
                     max_change_ratio=float(self.llm_defaults.get("max_change_ratio", 0.35)),
                     domain_hint=str(self.llm_defaults.get("domain_hint", "")),
-                    external_agent_enabled=bool(self.external_agent_enabled_var.get()),
-                    external_agent_url=str(self.external_agent_url_var.get()).strip()
-                    or "http://127.0.0.1:8000/v1/agent/chat",
                 ),
             )
             timings["llm"] = int((time.perf_counter() - started) * 1000)
@@ -1003,13 +969,73 @@ class VoiceInputApp:
                 "",
                 llm_result.fallback_reason,
                 timings,
-                bool(self.external_agent_enabled_var.get()),
-                llm_result.external_agent_response,
-                llm_result.external_agent_raw_response,
             )
         except Exception as exc:  # noqa: BLE001
             self.logger.exception("Pipeline failed")
             self.root.after(0, self._apply_results, "", "", str(exc), "", timings)
+
+    def _execute_voice_command(self, cmd: VoiceCommand) -> None:
+        self._stop_processing_indicator()
+        if not self._continuous_mode_active:
+            self.record_button.config(state=tk.NORMAL)
+
+        if cmd.action == "dict_add":
+            reading = cmd.args.get("reading", "").strip()
+            surface = cmd.args.get("surface", "").strip()
+            try:
+                self.personal_dictionary.add_or_update(reading=reading, surface=surface)
+                self._refresh_dictionary_list()
+                self.status_var.set(f"辞書登録: {reading} → {surface}")
+            except ValueError as exc:
+                self.status_var.set(f"辞書登録エラー: {exc}")
+
+        elif cmd.action == "dict_remove":
+            reading = cmd.args.get("reading", "").strip()
+            self.personal_dictionary.remove(reading)
+            self._refresh_dictionary_list()
+            self.status_var.set(f"辞書削除: {reading}")
+
+        elif cmd.action == "clear":
+            self._set_text(self.final_text, "")
+            if self.asr_text is not None:
+                self._set_text(self.asr_text, "")
+            self.current_raw_text = ""
+            self.status_var.set("テキストをクリアしました")
+
+        elif cmd.action == "copy":
+            text = self.final_text.get("1.0", tk.END).strip()
+            if text:
+                self.root.clipboard_clear()
+                self.root.clipboard_append(text)
+                self.status_var.set("テキストをコピーしました")
+            else:
+                self.status_var.set("コピー対象のテキストがありません")
+
+        elif cmd.action == "properties":
+            self._open_properties_dialog()
+            self.status_var.set("プロパティを開きました")
+
+        elif cmd.action == "open_app":
+            self._open_app(cmd.args.get("app", ""))
+
+    def _open_app(self, app: str) -> None:
+        _APP_COMMANDS = {
+            "powerpoint": ["powerpnt"],
+            "excel": ["excel"],
+            "word": ["winword"],
+            "browser": ["start", ""],
+        }
+        args = _APP_COMMANDS.get(app)
+        if args is None:
+            self.status_var.set(f"不明なアプリ: {app}")
+            return
+        try:
+            subprocess.Popen(args, shell=True)
+            label = {"powerpoint": "PowerPoint", "excel": "Excel", "word": "Word", "browser": "ブラウザ"}.get(app, app)
+            self.status_var.set(f"{label} を起動しました")
+        except Exception as exc:  # noqa: BLE001
+            self.logger.exception("Failed to open app: %s", app)
+            self.status_var.set(f"起動エラー: {exc}")
 
     def _apply_results(
         self,
@@ -1018,32 +1044,21 @@ class VoiceInputApp:
         error: str,
         fallback_reason: str = "",
         timings: dict[str, int] | None = None,
-        external_agent_used: bool = False,
-        external_agent_response: str = "",
-        external_agent_raw_response: str = "",
     ) -> None:
         self._stop_processing_indicator()
-        self.record_button.config(state=tk.NORMAL)
+        if not self._continuous_mode_active:
+            self.record_button.config(state=tk.NORMAL)
 
         if error:
-            self.status_var.set("Error")
-            messagebox.showerror("Processing error", self._format_processing_error(error))
+            self.status_var.set("Error" if not self._continuous_mode_active else f"Error: {error[:60]}")
+            if not self._continuous_mode_active:
+                messagebox.showerror("Processing error", self._format_processing_error(error))
             return
 
         timing_suffix = self._format_timing_suffix(timings)
         self._set_text(self.final_text, final)
         if self.asr_text is not None:
             self._set_text(self.asr_text, asr_text_value)
-        if self.agent_response_text is not None:
-            self._set_text(
-                self.agent_response_text,
-                external_agent_response if external_agent_used else "",
-            )
-        if self.rest_response_text is not None:
-            self._set_text(
-                self.rest_response_text,
-                external_agent_raw_response if external_agent_used else "",
-            )
         self.current_raw_text = asr_text_value
         if self.system_wide_input_var.get():
             try:
@@ -1085,6 +1100,7 @@ class VoiceInputApp:
         self.root.after(250, self._tick_processing_indicator, token)
 
     def _on_close(self) -> None:
+        self.continuous_listener.stop()
         self.system_wide_input.stop()
         self.root.destroy()
 
@@ -1153,6 +1169,8 @@ def build_app(
         whisper_compute_type=str(asr_defaults.get("whisper_compute_type", "int8")),
         whisper_download_dir=root_dir / str(asr_defaults.get("whisper_download_dir", "models/whisper")),
     )
+    saved_device_str = asr_defaults.get("audio_input_device", None)
+    audio_config.device = _parse_device_choice(str(saved_device_str)) if saved_device_str else None
     recorder = AudioRecorder(config=audio_config)
     llm_editor = LLMPostEditor(
         model_path=Path(str(llm_defaults.get("model_path", "OpenVINO/Qwen3-8B-int4-cw-ov"))),

@@ -22,9 +22,5 @@
   "llm_blocked_patterns": [],
   "llm_device": "GPU",
   "llm_auto_download": false,
-  "llm_download_dir": "models/openvino",
-  "external_agent_enabled": false,
-  "external_agent_url": "http://127.0.0.1:8000/v1/agent/chat",
-  "autonomous_agent_mode": "internal",
-  "autonomous_agent_external_url": "http://127.0.0.1:8000/v1/agent/run"
+  "llm_download_dir": "models/openvino"
 }
