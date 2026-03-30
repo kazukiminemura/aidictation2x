@@ -33,6 +33,16 @@ _CLOSE = (
 _DO = r'(?:する|して(?:ください)?)?'
 
 
+def _looks_like_url_target(text: str) -> bool:
+    candidate = text.strip().lower()
+    if not candidate:
+        return False
+    return (
+        candidate.startswith(("http://", "https://", "www."))
+        or "." in candidate
+    )
+
+
 def detect_voice_command(text: str) -> Optional[VoiceCommand]:
     """Return a VoiceCommand if *text* matches a known command pattern, else None."""
     # Strip trailing punctuation and whitespace before matching
@@ -69,6 +79,54 @@ def detect_voice_command(text: str) -> Optional[VoiceCommand]:
     # --- Open properties ---
     if re.match(r'^(?:プロパティ|設定を開く|設定|プロパティを開く)$', t):
         return VoiceCommand("properties", {})
+
+    # --- Browser navigation ---
+    if re.match(r'^(?:ブラウザ)?\s*(?:戻る|前へ|ひとつ前へ|一つ前へ)$', t):
+        return VoiceCommand("browser_back", {})
+
+    if re.match(r'^(?:ブラウザ)?\s*(?:進む|次へ|ひとつ先に|一つ先に|ひとつ先へ|一つ先へ)$', t):
+        return VoiceCommand("browser_forward", {})
+
+    # --- Browser search ---
+    m = re.match(r'^(?:ブラウザで)?検索\s+(.+)$', t)
+    if m:
+        return VoiceCommand("browser_search", {"query": m.group(1).strip()})
+
+    m = re.match(r'^(.+?)\s*を\s*(?:ブラウザで)?検索$', t)
+    if m:
+        query = m.group(1).strip()
+        if query:
+            return VoiceCommand("browser_search", {"query": query})
+
+    # --- Browser open top search result ---
+    m = re.match(r'^(.+?)\s*を\s*(?:ブラウザで)?開(?:く|いて)$', t)
+    if m:
+        query = m.group(1).strip()
+        if query and not _looks_like_url_target(query):
+            return VoiceCommand("browser_open_result", {"query": query})
+
+    m = re.match(r'^(.+?)\s*(?:の)?(?:リンク|検索結果)\s*(?:を)?開(?:く|いて)$', t)
+    if m:
+        query = m.group(1).strip()
+        if query:
+            return VoiceCommand("browser_open_result", {"query": query})
+
+    # --- Browser open URL ---
+    m = re.match(r'^(?:リンク(?:先)?|url)\s+(.+)$', t, flags=re.IGNORECASE)
+    if m:
+        target = m.group(1).strip()
+        if target:
+            target = re.sub(r'\s*(?:を)?(?:開く|開いて|に飛ぶ|へ飛ぶ)$', '', target).strip()
+            if _looks_like_url_target(target):
+                return VoiceCommand("browser_open_url", {"target": target})
+
+    m = re.match(r'^(.+?)\s*(?:に|へ)\s*飛(?:ぶ|んで)$', t)
+    if m:
+        target = m.group(1).strip()
+        if _looks_like_url_target(target):
+            return VoiceCommand("browser_open_url", {"target": target})
+        if target:
+            return VoiceCommand("browser_open_result", {"query": target})
 
     # --- Launch any installed app ---
     # Pattern A: action word first — "起動 エクセル" / "開いて メモ帳"

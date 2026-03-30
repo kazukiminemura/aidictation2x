@@ -214,7 +214,7 @@ class VoiceInputApp:
         ).pack(fill=tk.X)
         tk.Label(
             system_frame,
-            text="Voice cmds: クリア / コピー / プロパティ / 辞書登録 [読み] [表記] / 辞書削除 [読み]",
+            text="Voice cmds: クリア / コピー / プロパティ / 検索 [語句] / [語句] を開く / [語句] に飛ぶ / リンク [URL] / 一つ前へ / 一つ先に / 辞書登録 [読み] [表記] / 辞書削除 [読み]",
             fg="#5a7a9b",
             bg="#0a0e14",
             anchor="w",
@@ -1095,6 +1095,24 @@ class VoiceInputApp:
             self._open_properties_dialog()
             self.status_var.set("プロパティを開きました")
 
+        elif cmd.action == "browser_search":
+            query = cmd.args.get("query", "")
+            threading.Thread(target=self._browser_search_worker, args=(query,), daemon=True).start()
+
+        elif cmd.action == "browser_open_result":
+            query = cmd.args.get("query", "")
+            threading.Thread(target=self._browser_open_result_worker, args=(query,), daemon=True).start()
+
+        elif cmd.action == "browser_open_url":
+            target = cmd.args.get("target", "")
+            threading.Thread(target=self._browser_open_url_worker, args=(target,), daemon=True).start()
+
+        elif cmd.action == "browser_back":
+            threading.Thread(target=self._browser_back_worker, daemon=True).start()
+
+        elif cmd.action == "browser_forward":
+            threading.Thread(target=self._browser_forward_worker, daemon=True).start()
+
         elif cmd.action == "launch_any":
             query = cmd.args.get("query", "")
             threading.Thread(target=self._launch_app_worker, args=(query,), daemon=True).start()
@@ -1112,6 +1130,52 @@ class VoiceInputApp:
         except Exception as exc:  # noqa: BLE001
             self.logger.exception("Failed to launch app: %s", query)
             self.root.after(0, self.status_var.set, f"起動エラー: {exc}")
+
+    def _browser_search_worker(self, query: str) -> None:
+        try:
+            label = self.app_launcher.browser_search(query)
+            self.root.after(0, self.status_var.set, f"{label} で検索しました: {query}")
+        except ValueError as exc:
+            self.root.after(0, self.status_var.set, str(exc))
+        except Exception as exc:  # noqa: BLE001
+            self.logger.exception("Failed to search in browser: %s", query)
+            self.root.after(0, self.status_var.set, f"検索エラー: {exc}")
+
+    def _browser_open_result_worker(self, query: str) -> None:
+        try:
+            label = self.app_launcher.browser_open_result(query)
+            self.root.after(0, self.status_var.set, f"{label} で先頭候補を開きました: {query}")
+        except ValueError as exc:
+            self.root.after(0, self.status_var.set, str(exc))
+        except Exception as exc:  # noqa: BLE001
+            self.logger.exception("Failed to open browser result: %s", query)
+            self.root.after(0, self.status_var.set, f"リンク移動エラー: {exc}")
+
+    def _browser_open_url_worker(self, target: str) -> None:
+        try:
+            label = self.app_launcher.browser_open_url(target)
+            self.root.after(0, self.status_var.set, f"{label} で開きました: {target}")
+        except ValueError as exc:
+            self.root.after(0, self.status_var.set, str(exc))
+        except Exception as exc:  # noqa: BLE001
+            self.logger.exception("Failed to open browser url: %s", target)
+            self.root.after(0, self.status_var.set, f"リンク移動エラー: {exc}")
+
+    def _browser_back_worker(self) -> None:
+        try:
+            label = self.app_launcher.browser_back()
+            self.root.after(0, self.status_var.set, f"{label} で戻りました")
+        except Exception as exc:  # noqa: BLE001
+            self.logger.exception("Failed to navigate browser back")
+            self.root.after(0, self.status_var.set, f"ブラウザ操作エラー: {exc}")
+
+    def _browser_forward_worker(self) -> None:
+        try:
+            label = self.app_launcher.browser_forward()
+            self.root.after(0, self.status_var.set, f"{label} で進みました")
+        except Exception as exc:  # noqa: BLE001
+            self.logger.exception("Failed to navigate browser forward")
+            self.root.after(0, self.status_var.set, f"ブラウザ操作エラー: {exc}")
 
     def _close_app_worker(self, query: str) -> None:
         try:

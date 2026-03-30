@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
+from urllib.parse import quote_plus, urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,44 @@ class AppLauncher:
 
     def __init__(self) -> None:
         self._cache: list[AppEntry] | None = None
+
+    def browser_search(self, query: str) -> str:
+        """Open the default browser with a search query."""
+        import webbrowser
+
+        q = query.strip()
+        if not q:
+            raise ValueError("検索語が空です")
+        webbrowser.open(f"https://www.google.com/search?q={quote_plus(q)}")
+        return "ブラウザ"
+
+    def browser_open_result(self, query: str) -> str:
+        """Open the top web result for a search query."""
+        import webbrowser
+
+        q = query.strip()
+        if not q:
+            raise ValueError("検索語が空です")
+        webbrowser.open(f"https://www.google.com/search?btnI=I&q={quote_plus(q)}")
+        return "ブラウザ"
+
+    def browser_open_url(self, target: str) -> str:
+        """Open a URL target in the default browser."""
+        import webbrowser
+
+        url = self._normalize_browser_target(target)
+        webbrowser.open(url)
+        return "ブラウザ"
+
+    def browser_back(self) -> str:
+        """Send the browser back shortcut to the active window."""
+        self._send_browser_shortcut("back")
+        return "ブラウザ"
+
+    def browser_forward(self) -> str:
+        """Send the browser forward shortcut to the active window."""
+        self._send_browser_shortcut("forward")
+        return "ブラウザ"
 
     def refresh(self) -> None:
         """Invalidate the app cache so it is rebuilt on next access."""
@@ -116,6 +155,28 @@ class AppLauncher:
         # .lnk — use the app name or fallback stem as best-effort process name
         stem = fallback or entry.name
         return f"{stem}.exe"
+
+    def _send_browser_shortcut(self, direction: str) -> None:
+        from pynput import keyboard
+
+        key = keyboard.Key.left if direction == "back" else keyboard.Key.right
+        controller = keyboard.Controller()
+        with controller.pressed(keyboard.Key.alt):
+            controller.press(key)
+            controller.release(key)
+
+    def _normalize_browser_target(self, target: str) -> str:
+        candidate = target.strip()
+        if not candidate:
+            raise ValueError("リンク先が空です")
+        if " " in candidate:
+            raise ValueError("リンク先の形式が不正です")
+        if not re.match(r"^[a-z][a-z0-9+.-]*://", candidate, flags=re.IGNORECASE):
+            candidate = f"https://{candidate}"
+        parsed = urlparse(candidate)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("リンク先の形式が不正です")
+        return candidate
 
     def _find(self, query: str) -> Optional[AppEntry]:
         import difflib
