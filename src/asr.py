@@ -1,10 +1,14 @@
 from pathlib import Path
+from typing import Callable
 
 import numpy as np
 
-_MODEL_DIR_NAME = "whisper-large-v3-turbo"
-_HF_MODEL_ID = "openai/whisper-large-v3-turbo"
 _OV_EXPORT_TASK = "automatic-speech-recognition"
+_DEFAULT_MODEL_ID = "openai/whisper-large-v3-turbo"
+_SUPPORTED_MODEL_IDS = (
+    "openai/whisper-large-v3-turbo",
+    "openai/whisper-base",
+)
 
 
 class _WhisperEngine:
@@ -79,17 +83,24 @@ class ASREngine:
         self,
         sample_rate_hz: int,
         device: str = "auto",
-        model_dir: Path | None = None,
+        model_id: str = _DEFAULT_MODEL_ID,
+        models_root_dir: Path | None = None,
     ):
         self.sample_rate_hz = sample_rate_hz
         self.device = device
-        self.model_dir = model_dir or Path("models") / "whisper" / _MODEL_DIR_NAME
+        self.model_id = _normalize_model_id(model_id)
+        self.models_root_dir = models_root_dir or Path("models") / "whisper"
         self._engine: _WhisperEngine | None = None
 
-    def configure(self, device: str | None = None) -> None:
+    def configure(self, device: str | None = None, model_id: str | None = None) -> None:
         if device is not None and device != self.device:
             self.device = device
             self._engine = None
+        if model_id is not None:
+            normalized_model_id = _normalize_model_id(model_id)
+            if normalized_model_id != self.model_id:
+                self.model_id = normalized_model_id
+                self._engine = None
 
     def transcribe(self, audio_data: np.ndarray) -> str:
         audio = np.asarray(audio_data, dtype=np.float32)
@@ -121,12 +132,12 @@ class ASREngine:
         return text
 
     def _build_engine(self) -> _WhisperEngine:
-        if not _looks_like_openvino_model_dir(self.model_dir):
+        if not _looks_like_openvino_model_dir(self.get_model_dir()):
             self.convert_model()
-        return _WhisperEngine(str(self.model_dir), self.device)
+        return _WhisperEngine(str(self.get_model_dir()), self.device)
 
-    def convert_model(self) -> str:
-        """Download and convert openai/whisper-large-v3-turbo into OpenVINO IR."""
+    def convert_model(self, progress_callback: Callable[[str], None] | None = None) -> str:
+        """Download and convert the selected Whisper model into OpenVINO IR."""
         try:
             from optimum.exporters.openvino.convert import export_tokenizer
             from optimum.intel import OVModelForSpeechSeq2Seq
@@ -134,27 +145,39 @@ class ASREngine:
         except ImportError as exc:
             raise RuntimeError("openvino_export_dependencies_not_installed") from exc
 
-        self.model_dir.mkdir(parents=True, exist_ok=True)
-        processor = AutoProcessor.from_pretrained(_HF_MODEL_ID)
+        model_dir = self.get_model_dir()
+        model_dir.mkdir(parents=True, exist_ok=True)
+
+        _report_progress(progress_callback, f"Downloading processor for {self.get_display_name()}...")
+        processor = AutoProcessor.from_pretrained(self.model_id)
+
+        _report_progress(progress_callback, f"Exporting {self.get_display_name()} to OpenVINO IR...")
         model = OVModelForSpeechSeq2Seq.from_pretrained(
-            _HF_MODEL_ID,
+            self.model_id,
             export=True,
             compile=False,
         )
-        processor.save_pretrained(self.model_dir)
-        model.save_pretrained(self.model_dir)
+        _report_progress(progress_callback, f"Saving processor files for {self.get_display_name()}...")
+        processor.save_pretrained(model_dir)
+        _report_progress(progress_callback, f"Saving OpenVINO IR files for {self.get_display_name()}...")
+        model.save_pretrained(model_dir)
 
         tokenizer = getattr(processor, "tokenizer", None)
         if tokenizer is not None:
-            export_tokenizer(tokenizer, self.model_dir, task=_OV_EXPORT_TASK)
+            _report_progress(progress_callback, f"Exporting tokenizer for {self.get_display_name()}...")
+            export_tokenizer(tokenizer, model_dir, task=_OV_EXPORT_TASK)
 
-        if not _looks_like_openvino_model_dir(self.model_dir):
+        _report_progress(progress_callback, f"Validating exported files for {self.get_display_name()}...")
+        if not _looks_like_openvino_model_dir(model_dir):
             raise RuntimeError("model_download_failed")
         self._engine = None
-        return str(self.model_dir)
+        return str(model_dir)
 
     def get_model_dir(self) -> Path:
-        return self.model_dir
+        return self.models_root_dir / _model_dir_name(self.model_id)
+
+    def get_display_name(self) -> str:
+        return self.model_id.split("/", 1)[-1]
 
 
 def _to_openvino_device(device: str) -> str:
@@ -200,3 +223,23 @@ def _has_voice(audio_data: np.ndarray) -> bool:
         return False
     audio = np.asarray(audio_data, dtype=np.float32)
     return float(np.mean(np.abs(audio))) >= 0.003
+
+
+def get_supported_model_ids() -> tuple[str, ...]:
+    return _SUPPORTED_MODEL_IDS
+
+
+def _normalize_model_id(model_id: str) -> str:
+    normalized = (model_id or "").strip() or _DEFAULT_MODEL_ID
+    if normalized not in _SUPPORTED_MODEL_IDS:
+        raise RuntimeError(f"unsupported_asr_model: {normalized}")
+    return normalized
+
+
+def _model_dir_name(model_id: str) -> str:
+    return model_id.split("/", 1)[-1].replace("/", "--")
+
+
+def _report_progress(progress_callback: Callable[[str], None] | None, message: str) -> None:
+    if progress_callback is not None:
+        progress_callback(message)

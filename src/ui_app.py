@@ -9,7 +9,7 @@ from tkinter import ttk
 
 import sounddevice as sd
 
-from .asr import ASREngine
+from .asr import ASREngine, get_supported_model_ids
 from .audio_capture import AudioConfig, AudioRecorder
 from .business_email import to_business_email
 from .llm_post_editor import LLMOptions, LLMPostEditor
@@ -82,6 +82,9 @@ class VoiceInputApp:
         self.current_raw_text = ""
         self.hotkey_pressed = False
         self.llm_enabled_var = tk.BooleanVar(value=bool(self.llm_defaults.get("enabled", False)))
+        self.whisper_model_id_var = tk.StringVar(
+            value=str(self.asr_defaults.get("whisper_model_id", "openai/whisper-large-v3-turbo"))
+        )
         self.whisper_device_var = tk.StringVar(value=str(self.asr_defaults.get("whisper_device", "auto")))
         # Audio input device: store as "index: name" string or "auto (system default)"
         _saved_device = self.asr_defaults.get("audio_input_device", None)
@@ -340,6 +343,7 @@ class VoiceInputApp:
         business_email_var = tk.BooleanVar(value=self.business_email_var.get())
         system_wide_var = tk.BooleanVar(value=self.system_wide_input_var.get())
         llm_enabled_var = tk.BooleanVar(value=self.llm_enabled_var.get())
+        whisper_model_id_var = tk.StringVar(value=self.whisper_model_id_var.get())
         whisper_device_var = tk.StringVar(value=self.whisper_device_var.get())
         audio_device_var = tk.StringVar(value=self.audio_device_var.get())
         voice_threshold_var = tk.StringVar(value=self.voice_threshold_var.get())
@@ -367,11 +371,18 @@ class VoiceInputApp:
         ).pack(anchor=tk.W, fill=tk.X)
         tk.Label(frame, text="Voice threshold (Continuous mode: increase if silence not detected, e.g. 0.01-0.1)").pack(anchor=tk.W, pady=(8, 0))
         tk.Entry(frame, textvariable=voice_threshold_var, width=10).pack(anchor=tk.W)
+        tk.Label(frame, text="ASR model").pack(anchor=tk.W, pady=(8, 0))
+        ttk.Combobox(
+            frame,
+            textvariable=whisper_model_id_var,
+            values=list(get_supported_model_ids()),
+            state="readonly",
+        ).pack(anchor=tk.W, fill=tk.X)
         tk.Label(frame, text="ASR device").pack(anchor=tk.W, pady=(8, 0))
         tk.OptionMenu(frame, whisper_device_var, "auto", "npu", "gpu", "cpu").pack(anchor=tk.W, fill=tk.X)
         tk.Button(
             frame,
-            text="Download and Convert ASR Model (whisper-large-v3-turbo)",
+            text="Download and Convert ASR Model",
             command=lambda: download_asr_model_from_dialog(),
             bg="#1f6feb",
             fg="#ffffff",
@@ -445,8 +456,9 @@ class VoiceInputApp:
         self._refresh_dictionary_list()
 
         def download_asr_model_from_dialog() -> None:
+            model_id = whisper_model_id_var.get().strip() or "openai/whisper-large-v3-turbo"
             device = whisper_device_var.get().strip() or "auto"
-            self._download_asr_model_clicked(device=device)
+            self._download_asr_model_clicked(model_id=model_id, device=device)
 
         def apply_and_close() -> None:
             self.auto_edit_var.set(auto_edit_var.get())
@@ -455,6 +467,7 @@ class VoiceInputApp:
             self.business_email_var.set(business_email_var.get())
             self.llm_enabled_var.set(llm_enabled_var.get())
             self.llm_defaults["enabled"] = bool(llm_enabled_var.get())
+            self.whisper_model_id_var.set(whisper_model_id_var.get())
             self.whisper_device_var.set(whisper_device_var.get())
             self._apply_asr_settings()
 
@@ -523,27 +536,33 @@ class VoiceInputApp:
             self.status_var.set("System-wide input: OFF")
 
     def _apply_asr_settings(self) -> None:
+        model_id = self.whisper_model_id_var.get().strip() or "openai/whisper-large-v3-turbo"
         device = self.whisper_device_var.get().strip() or "auto"
+        self.asr_defaults["whisper_model_id"] = model_id
         self.asr_defaults["whisper_device"] = device
-        self.asr_engine.configure(device=device)
+        self.asr_engine.configure(device=device, model_id=model_id)
 
-    def _download_asr_model_clicked(self, device: str) -> None:
-        self.status_var.set("Converting ASR model...")
+    def _download_asr_model_clicked(self, model_id: str, device: str) -> None:
+        self.status_var.set(f"Preparing ASR model: {model_id}")
         threading.Thread(
             target=self._download_asr_model_worker,
-            args=(device,),
+            args=(model_id, device),
             daemon=True,
         ).start()
 
-    def _download_asr_model_worker(self, device: str) -> None:
+    def _download_asr_model_worker(self, model_id: str, device: str) -> None:
         result: dict[str, str] = {"model_path": "", "error": ""}
+        progress: dict[str, str] = {"phase": "Preparing..."}
         try:
-            self.asr_engine.configure(device=device)
+            self.asr_engine.configure(device=device, model_id=model_id)
             target_dir = self.asr_engine.get_model_dir()
+
+            def on_progress(message: str) -> None:
+                progress["phase"] = message
 
             def run_convert() -> None:
                 try:
-                    result["model_path"] = self.asr_engine.convert_model()
+                    result["model_path"] = self.asr_engine.convert_model(progress_callback=on_progress)
                 except Exception as exc:  # noqa: BLE001
                     result["error"] = f"{type(exc).__name__}: {exc}"
                     try:
@@ -561,8 +580,9 @@ class VoiceInputApp:
                     0,
                     self.status_var.set,
                     (
-                        "Downloading and converting ASR model (OpenVINO IR)... "
-                        f"{self._format_size(downloaded)} "
+                        f"{progress['phase']} "
+                        f"[{self.asr_engine.get_display_name()} | {device.upper()}] "
+                        f"{self._format_size(downloaded)} written "
                         f"({self._format_elapsed(elapsed_s)})"
                     ),
                 )
@@ -581,7 +601,7 @@ class VoiceInputApp:
                 f"{self._format_download_error(error)}\n\nLog: {self.root_dir / 'logs' / 'app.log'}",
             )
             return
-        self.status_var.set("ASR model ready")
+        self.status_var.set(f"ASR model ready: {Path(model_path).name}")
         messagebox.showinfo("ASR model", f"Model is ready at:\n{model_path}")
 
     def _download_model_clicked(self) -> None:
@@ -647,6 +667,11 @@ class VoiceInputApp:
             return (
                 "ASR conversion dependencies are missing in this build.\n"
                 "Please install dependencies with 'pip install -r requirements.txt'."
+            )
+        if "unsupported_asr_model" in raw:
+            return (
+                "Unsupported ASR model was selected.\n"
+                "Choose one of the supported Whisper models in Properties."
             )
         if "model_not_found_and_auto_download_disabled" in raw:
             return (
@@ -1108,8 +1133,9 @@ def build_app(
     whisper_download_dir = root_dir / str(asr_defaults.get("whisper_download_dir", "models/whisper"))
     engine = ASREngine(
         sample_rate_hz=audio_config.sample_rate_hz,
+        model_id=str(asr_defaults.get("whisper_model_id", "openai/whisper-large-v3-turbo")),
         device=str(asr_defaults.get("whisper_device", "auto")),
-        model_dir=whisper_download_dir / "whisper-large-v3-turbo",
+        models_root_dir=whisper_download_dir,
     )
     saved_device_str = asr_defaults.get("audio_input_device", None)
     audio_config.device = _parse_device_choice(str(saved_device_str)) if saved_device_str else None
