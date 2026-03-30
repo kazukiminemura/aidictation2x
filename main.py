@@ -14,6 +14,34 @@ from src.ui_app import build_app
 
 
 APP_NAME = "AIDictation2x"
+DEFAULT_APP_SETTINGS = {
+    "log_level": "INFO",
+    "text_rules_file": "config/text_rules.json",
+    "personal_dictionary_file": "config/personal_dictionary.json",
+    "sample_rate_hz": 16000,
+    "channels": 1,
+    "history_file": "data/history.json",
+    "autosave_file": "data/last_session.json",
+    "max_history_items": 10,
+    "whisper_device": "auto",
+    "whisper_download_dir": "models/whisper",
+    "llm_enabled": False,
+    "llm_model_path": "OpenVINO/Qwen3-8B-int4-cw-ov",
+    "llm_strength": "medium",
+    "llm_max_input_chars": 1200,
+    "llm_max_change_ratio": 0.35,
+    "llm_domain_hint": "",
+    "llm_timeout_ms": 8000,
+    "llm_blocked_patterns": [],
+    "llm_device": "GPU",
+    "llm_auto_download": False,
+    "llm_download_dir": "models/openvino",
+    "enable_system_wide_input": True,
+}
+DEFAULT_TEXT_RULES = {
+    "filler_words": [],
+    "habit_patterns": [],
+}
 
 
 def setup_logging(level: str, runtime_root: Path | None = None) -> None:
@@ -51,6 +79,7 @@ def _configure_hf_runtime_env() -> None:
     os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
     os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
     os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "0")
+    os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 
 
 def _is_frozen() -> bool:
@@ -161,14 +190,14 @@ def main() -> None:
     _prepare_runtime_files(bundle_root=bundle_root, runtime_root=runtime_root)
 
     settings_path = runtime_root / "config" / "app_settings.json"
-    settings = load_json(settings_path)
+    settings = load_json(settings_path, default=DEFAULT_APP_SETTINGS)
 
     setup_logging(settings.get("log_level", "INFO"), runtime_root=runtime_root)
 
     rules_path = _resolve_runtime_path(runtime_root, settings.get("text_rules_file", "config/text_rules.json"))
     if not rules_path.exists():
         rules_path = bundle_root / settings.get("text_rules_file", "config/text_rules.json")
-    rules = load_json(rules_path)
+    rules = load_json(rules_path, default=DEFAULT_TEXT_RULES)
 
     audio_config = AudioConfig(
         sample_rate_hz=int(settings.get("sample_rate_hz", 16000)),
@@ -182,9 +211,7 @@ def main() -> None:
     )
 
     asr_defaults = {
-        "whisper_model_name": str(settings.get("whisper_model_name", "large-v3")),
         "whisper_device": str(settings.get("whisper_device", "auto")),
-        "whisper_compute_type": str(settings.get("whisper_compute_type", "int8")),
         "whisper_download_dir": str(
             _resolve_runtime_path(runtime_root, str(settings.get("whisper_download_dir", "models/whisper")))
         ),

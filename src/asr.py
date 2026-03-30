@@ -1,28 +1,21 @@
-import os
 from pathlib import Path
 
 import numpy as np
 
-_WHISPER_MODEL_REPOS = {
-    "tiny": "OpenVINO/whisper-tiny",
-    "base": "OpenVINO/whisper-base",
-    "small": "OpenVINO/whisper-small",
-    "medium": "OpenVINO/whisper-medium",
-    "large-v3": "OpenVINO/whisper-large-v3-int8-ov",
-    "large-v3-turbo": "OpenVINO/whisper-large-v3-turbo",
-}
+_MODEL_DIR_NAME = "whisper-large-v3-turbo"
+_HF_MODEL_ID = "openai/whisper-large-v3-turbo"
+_OV_EXPORT_TASK = "automatic-speech-recognition"
 
 
 class _WhisperEngine:
-    def __init__(self, model_name: str, device: str, compute_type: str):  # noqa: ARG002
+    def __init__(self, model_dir: str, device: str):
         try:
             import openvino_genai as ov_genai
         except ImportError as exc:
             raise RuntimeError("openvino_genai_not_installed") from exc
 
         ov_device = _to_openvino_device(device)
-        self.pipeline = ov_genai.WhisperPipeline(model_name, ov_device)
-        # Use model-provided defaults; constructing empty config can miss required maps (e.g. lang_to_id).
+        self.pipeline = ov_genai.WhisperPipeline(model_dir, ov_device)
         self.generation_config = self.pipeline.get_generation_config()
         ja_key = _select_japanese_language_key(self.generation_config)
         if ja_key:
@@ -32,7 +25,6 @@ class _WhisperEngine:
         self.generation_config_auto = self.pipeline.get_generation_config()
         self.generation_config_auto.task = "transcribe"
         self.generation_config_auto.return_timestamps = False
-        # Keep chunks conservative and split again on runtime "vector too long" errors.
         self.max_chunk_samples = 4 * 16000
         self.min_chunk_samples = max(1, int(0.25 * 16000))
 
@@ -43,7 +35,6 @@ class _WhisperEngine:
         audio = np.asarray(audio_data, dtype=np.float32)
         texts = self._transcribe_with_config(audio, self.generation_config)
         if not texts and _has_voice(audio):
-            # Fallback to auto language detection when explicit Japanese key yields empty output.
             texts = self._transcribe_with_config(audio, self.generation_config_auto)
         return " ".join(texts).strip()
 
@@ -87,41 +78,17 @@ class ASREngine:
     def __init__(
         self,
         sample_rate_hz: int,
-        whisper_model_name: str = "large-v3",
-        whisper_device: str = "auto",
-        whisper_compute_type: str = "int8",
-        whisper_download_dir: Path | None = None,
+        device: str = "auto",
+        model_dir: Path | None = None,
     ):
         self.sample_rate_hz = sample_rate_hz
-        self.whisper_model_name = whisper_model_name
-        self.whisper_device = whisper_device
-        self.whisper_compute_type = whisper_compute_type
-        self.whisper_download_dir = whisper_download_dir or Path("models") / "whisper"
+        self.device = device
+        self.model_dir = model_dir or Path("models") / "whisper" / _MODEL_DIR_NAME
         self._engine: _WhisperEngine | None = None
 
-    def configure(
-        self,
-        whisper_model_name: str | None = None,
-        whisper_device: str | None = None,
-        whisper_compute_type: str | None = None,
-        whisper_download_dir: Path | None = None,
-    ) -> None:
-        changed = False
-
-        if whisper_model_name is not None and whisper_model_name != self.whisper_model_name:
-            self.whisper_model_name = whisper_model_name
-            changed = True
-        if whisper_device is not None and whisper_device != self.whisper_device:
-            self.whisper_device = whisper_device
-            changed = True
-        if whisper_compute_type is not None and whisper_compute_type != self.whisper_compute_type:
-            self.whisper_compute_type = whisper_compute_type
-            changed = True
-        if whisper_download_dir is not None and whisper_download_dir != self.whisper_download_dir:
-            self.whisper_download_dir = whisper_download_dir
-            changed = True
-
-        if changed:
+    def configure(self, device: str | None = None) -> None:
+        if device is not None and device != self.device:
+            self.device = device
             self._engine = None
 
     def transcribe(self, audio_data: np.ndarray) -> str:
@@ -136,10 +103,8 @@ class ASREngine:
         except Exception as exc:  # noqa: BLE001
             if "vector too long" not in str(exc).lower():
                 raise
-            # Last-resort fallback: split by short fixed windows and skip only failing windows.
             window = max(1, int(self.sample_rate_hz * 1))
             texts: list[str] = []
-            failed_windows = 0
             for start in range(0, int(audio.size), window):
                 chunk = audio[start : start + window]
                 if chunk.size == 0:
@@ -148,110 +113,48 @@ class ASREngine:
                     text = self._engine.transcribe(chunk).strip()
                 except Exception as inner_exc:  # noqa: BLE001
                     if "vector too long" in str(inner_exc).lower():
-                        failed_windows += 1
                         continue
                     raise
                 if text:
                     texts.append(text)
             return " ".join(texts).strip()
-        if text:
-            return text
-        return ""
+        return text
 
     def _build_engine(self) -> _WhisperEngine:
-        model_source = self._resolve_model_source()
-        return _WhisperEngine(
-            model_name=model_source,
-            device=self.whisper_device,
-            compute_type=self.whisper_compute_type,
-        )
+        if not _looks_like_openvino_model_dir(self.model_dir):
+            self.convert_model()
+        return _WhisperEngine(str(self.model_dir), self.device)
 
-    def download_whisper_model(self, model_name: str | None = None) -> str:
-        target_model = (model_name or self.whisper_model_name).strip()
-        if not target_model:
-            raise RuntimeError("whisper_model_name_missing")
-
-        local_path = Path(target_model)
-        if local_path.exists():
-            return str(local_path)
-
-        repo_id = _resolve_whisper_repo_id(target_model)
+    def convert_model(self) -> str:
+        """Download and convert openai/whisper-large-v3-turbo into OpenVINO IR."""
         try:
-            from huggingface_hub import snapshot_download
-            from huggingface_hub.utils import disable_progress_bars
+            from optimum.exporters.openvino.convert import export_tokenizer
+            from optimum.intel import OVModelForSpeechSeq2Seq
+            from transformers import AutoProcessor
         except ImportError as exc:
-            raise RuntimeError("huggingface_hub_not_installed") from exc
+            raise RuntimeError("openvino_export_dependencies_not_installed") from exc
 
-        disable_progress_bars()
-        os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
-        self.whisper_download_dir.mkdir(parents=True, exist_ok=True)
-        target_dir = self.whisper_download_dir / repo_id.replace("/", "--")
-        kwargs = {
-            "repo_id": repo_id,
-            "local_dir": str(target_dir),
-            "local_dir_use_symlinks": False,
-        }
-        try:
-            snapshot_download(tqdm_class=None, **kwargs)
-        except TypeError:
-            snapshot_download(**kwargs)
-        if not _looks_like_openvino_model_dir(target_dir):
-            raise RuntimeError("whisper_model_download_failed")
-        self.whisper_model_name = str(target_dir)
-        self._engine = None
-        return str(target_dir)
-
-    def get_whisper_download_target_dir(self, model_name: str | None = None) -> Path | None:
-        target_model = (model_name or self.whisper_model_name).strip()
-        if not target_model:
-            return None
-
-        local_path = Path(target_model)
-        if local_path.exists():
-            return local_path if local_path.is_dir() else local_path.parent
-
-        repo_id = _resolve_whisper_repo_id(target_model)
-        return self.whisper_download_dir / repo_id.replace("/", "--")
-
-    def _resolve_model_source(self) -> str:
-        model_name = (self.whisper_model_name or "").strip()
-        if not model_name:
-            raise RuntimeError("whisper_model_name_missing")
-
-        local_model_dir = Path(model_name)
-        if local_model_dir.exists() and _looks_like_openvino_model_dir(local_model_dir):
-            return str(local_model_dir)
-
-        repo_id = _resolve_whisper_repo_id(model_name)
-        cached_model_dir = self.whisper_download_dir / repo_id.replace("/", "--")
-        if cached_model_dir.exists() and _looks_like_openvino_model_dir(cached_model_dir):
-            return str(cached_model_dir)
-
-        # Fallback: auto-download when no local model is available.
-        try:
-            downloaded_path = self.download_whisper_model(model_name=model_name)
-            if _looks_like_openvino_model_dir(Path(downloaded_path)):
-                return downloaded_path
-        except Exception as exc:  # noqa: BLE001
-            raise RuntimeError(f"whisper_model_download_failed: {exc}") from exc
-
-        raise RuntimeError(
-            "whisper_model_not_found. Please pre-download from Properties -> Download ASR Model."
+        self.model_dir.mkdir(parents=True, exist_ok=True)
+        processor = AutoProcessor.from_pretrained(_HF_MODEL_ID)
+        model = OVModelForSpeechSeq2Seq.from_pretrained(
+            _HF_MODEL_ID,
+            export=True,
+            compile=False,
         )
+        processor.save_pretrained(self.model_dir)
+        model.save_pretrained(self.model_dir)
 
+        tokenizer = getattr(processor, "tokenizer", None)
+        if tokenizer is not None:
+            export_tokenizer(tokenizer, self.model_dir, task=_OV_EXPORT_TASK)
 
-def _resolve_whisper_repo_id(model_name: str) -> str:
-    model = model_name.strip()
-    if not model:
-        raise RuntimeError("whisper_model_name_missing")
+        if not _looks_like_openvino_model_dir(self.model_dir):
+            raise RuntimeError("model_download_failed")
+        self._engine = None
+        return str(self.model_dir)
 
-    if "/" in model:
-        return model
-
-    if model in _WHISPER_MODEL_REPOS:
-        return _WHISPER_MODEL_REPOS[model]
-
-    return f"OpenVINO/whisper-{model}"
+    def get_model_dir(self) -> Path:
+        return self.model_dir
 
 
 def _to_openvino_device(device: str) -> str:
