@@ -83,7 +83,7 @@ class VoiceInputApp:
         self.hotkey_pressed = False
         self.llm_enabled_var = tk.BooleanVar(value=bool(self.llm_defaults.get("enabled", False)))
         self.whisper_model_id_var = tk.StringVar(
-            value=str(self.asr_defaults.get("whisper_model_id", "openai/whisper-large-v3-turbo"))
+            value=str(self.asr_defaults.get("whisper_model_id", "openai/whisper-base"))
         )
         self.whisper_device_var = tk.StringVar(value=str(self.asr_defaults.get("whisper_device", "auto")))
         # Audio input device: store as "index: name" string or "auto (system default)"
@@ -307,7 +307,34 @@ class VoiceInputApp:
             self._set_text(self.final_text, auto.final_text)
             if self.asr_text is not None:
                 self._set_text(self.asr_text, auto.raw_text)
-        self.status_var.set("Ready (Ctrl+Space / Ctrl+Shift+Space)")
+            self.status_var.set("Ready (Ctrl+Space / Ctrl+Shift+Space)")
+            return
+
+        if self.asr_text is not None:
+            self._set_text(
+                self.asr_text,
+                (
+                    "ASR2X is ready.\n\n"
+                    "Quick start:\n"
+                    "1. Right-click -> Properties\n"
+                    "2. Download and Convert ASR Model\n"
+                    "3. Press Start Recording or use Ctrl+Space\n\n"
+                    "Default model: openai/whisper-base"
+                ),
+            )
+        self._set_text(
+            self.final_text,
+            (
+                "Your final text will appear here.\n\n"
+                "Recommended first run:\n"
+                "- Use whisper-base for the fastest setup\n"
+                "- Turn on LLM correction later if needed"
+            ),
+        )
+        if self.asr_engine.get_model_dir().exists():
+            self.status_var.set("Ready (Ctrl+Space / Ctrl+Shift+Space)")
+        else:
+            self.status_var.set("Ready - Right-click -> Properties -> Download and Convert ASR Model")
 
     def _bind_hotkeys(self) -> None:
         self.root.bind_all("<Control-KeyPress-space>", self._on_hotkey_press)
@@ -456,7 +483,7 @@ class VoiceInputApp:
         self._refresh_dictionary_list()
 
         def download_asr_model_from_dialog() -> None:
-            model_id = whisper_model_id_var.get().strip() or "openai/whisper-large-v3-turbo"
+            model_id = whisper_model_id_var.get().strip() or "openai/whisper-base"
             device = whisper_device_var.get().strip() or "auto"
             self._download_asr_model_clicked(model_id=model_id, device=device)
 
@@ -536,7 +563,7 @@ class VoiceInputApp:
             self.status_var.set("System-wide input: OFF")
 
     def _apply_asr_settings(self) -> None:
-        model_id = self.whisper_model_id_var.get().strip() or "openai/whisper-large-v3-turbo"
+        model_id = self.whisper_model_id_var.get().strip() or "openai/whisper-base"
         device = self.whisper_device_var.get().strip() or "auto"
         self.asr_defaults["whisper_model_id"] = model_id
         self.asr_defaults["whisper_device"] = device
@@ -1133,7 +1160,7 @@ def build_app(
     whisper_download_dir = root_dir / str(asr_defaults.get("whisper_download_dir", "models/whisper"))
     engine = ASREngine(
         sample_rate_hz=audio_config.sample_rate_hz,
-        model_id=str(asr_defaults.get("whisper_model_id", "openai/whisper-large-v3-turbo")),
+        model_id=str(asr_defaults.get("whisper_model_id", "openai/whisper-base")),
         device=str(asr_defaults.get("whisper_device", "auto")),
         models_root_dir=whisper_download_dir,
     )

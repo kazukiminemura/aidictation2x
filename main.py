@@ -23,7 +23,7 @@ DEFAULT_APP_SETTINGS = {
     "history_file": "data/history.json",
     "autosave_file": "data/last_session.json",
     "max_history_items": 10,
-    "whisper_model_id": "openai/whisper-large-v3-turbo",
+    "whisper_model_id": "openai/whisper-base",
     "whisper_device": "auto",
     "whisper_download_dir": "models/whisper",
     "llm_enabled": False,
@@ -212,7 +212,7 @@ def main() -> None:
     )
 
     asr_defaults = {
-        "whisper_model_id": str(settings.get("whisper_model_id", "openai/whisper-large-v3-turbo")),
+        "whisper_model_id": str(settings.get("whisper_model_id", "openai/whisper-base")),
         "whisper_device": str(settings.get("whisper_device", "auto")),
         "whisper_download_dir": str(
             _resolve_runtime_path(runtime_root, str(settings.get("whisper_download_dir", "models/whisper")))

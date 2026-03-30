@@ -4,7 +4,7 @@ import types
 
 import pytest
 
-from src.asr import ASREngine
+from src.asr import ASREngine, _dedupe_repeated_text
 
 
 @pytest.mark.parametrize(
@@ -76,3 +76,16 @@ def test_convert_model_exports_supported_whisper_models(
     assert any("Exporting tokenizer" in message for message in progress_messages)
     assert (tmp_path / dir_name / "openvino_encoder_model.xml").exists()
     assert (tmp_path / dir_name / "openvino_encoder_model.bin").exists()
+
+
+@pytest.mark.parametrize(
+    ("raw_text", "expected"),
+    [
+        ("同じ文です。同じ文です。", "同じ文です。"),
+        ("hello hello", "hello hello"),
+        ("こんにちは こんにちは", "こんにちは"),
+        ("テストです。 テストです。 次です。", "テストです。 次です。"),
+    ],
+)
+def test_dedupe_repeated_text(raw_text: str, expected: str) -> None:
+    assert _dedupe_repeated_text(raw_text) == expected

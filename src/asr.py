@@ -1,13 +1,14 @@
 from pathlib import Path
+import re
 from typing import Callable
 
 import numpy as np
 
 _OV_EXPORT_TASK = "automatic-speech-recognition"
-_DEFAULT_MODEL_ID = "openai/whisper-large-v3-turbo"
+_DEFAULT_MODEL_ID = "openai/whisper-base"
 _SUPPORTED_MODEL_IDS = (
-    "openai/whisper-large-v3-turbo",
     "openai/whisper-base",
+    "openai/whisper-large-v3-turbo",
 )
 
 
@@ -40,7 +41,7 @@ class _WhisperEngine:
         texts = self._transcribe_with_config(audio, self.generation_config)
         if not texts and _has_voice(audio):
             texts = self._transcribe_with_config(audio, self.generation_config_auto)
-        return " ".join(texts).strip()
+        return _dedupe_repeated_text(" ".join(texts).strip())
 
     def _transcribe_with_config(self, audio: np.ndarray, config) -> list[str]:  # noqa: ANN001
         texts: list[str] = []
@@ -243,3 +244,56 @@ def _model_dir_name(model_id: str) -> str:
 def _report_progress(progress_callback: Callable[[str], None] | None, message: str) -> None:
     if progress_callback is not None:
         progress_callback(message)
+
+
+def _dedupe_repeated_text(text: str) -> str:
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return ""
+
+    deduped_sentences = _dedupe_adjacent_sentence_runs(cleaned)
+    return _dedupe_exact_repeat(deduped_sentences)
+
+
+def _dedupe_adjacent_sentence_runs(text: str) -> str:
+    parts = [part.strip() for part in re.split(r"([。．.!！？?\n]+)", text) if part]
+    if not parts:
+        return text
+
+    merged: list[str] = []
+    last_normalized = ""
+    i = 0
+    while i < len(parts):
+        sentence = parts[i].strip()
+        suffix = parts[i + 1] if i + 1 < len(parts) and re.fullmatch(r"[。．.!！？?\n]+", parts[i + 1]) else ""
+        chunk = f"{sentence}{suffix}".strip()
+        normalized = _normalize_repeat_key(chunk)
+        if chunk and normalized != last_normalized:
+            merged.append(chunk)
+            last_normalized = normalized
+        i += 2 if suffix else 1
+
+    return " ".join(part for part in merged if part).strip()
+
+
+def _dedupe_exact_repeat(text: str) -> str:
+    compact = re.sub(r"\s+", " ", text).strip()
+    if not compact:
+        return ""
+
+    for unit_len in range(1, len(compact) // 2 + 1):
+        if len(compact) % unit_len != 0:
+            continue
+        unit = compact[:unit_len].strip()
+        if not unit:
+            continue
+        repeats = len(compact) // unit_len
+        if repeats < 2:
+            continue
+        if unit * repeats == compact:
+            return unit
+    return compact
+
+
+def _normalize_repeat_key(text: str) -> str:
+    return re.sub(r"[\s。．.!！？?\n]+", "", text).strip().lower()
