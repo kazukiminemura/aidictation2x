@@ -130,7 +130,7 @@ class VoiceInputApp:
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _build_ui(self) -> None:
-        self.root.title("Voice Input App")
+        self.root.title("ASR2X")
         self.root.geometry("430x840")
         self.root.configure(bg="#0a0e14")
 

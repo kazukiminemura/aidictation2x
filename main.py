@@ -13,7 +13,7 @@ from src.storage import Storage
 from src.ui_app import build_app
 
 
-APP_NAME = "AIDictation2x"
+APP_NAME = "ASR2X"
 DEFAULT_APP_SETTINGS = {
     "log_level": "INFO",
     "text_rules_file": "config/text_rules.json",
