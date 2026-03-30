@@ -7,6 +7,7 @@ from pathlib import Path
 from tkinter import messagebox
 from tkinter import ttk
 
+import numpy as np
 import sounddevice as sd
 
 from .asr import ASREngine, get_supported_model_ids
