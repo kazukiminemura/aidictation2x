@@ -21,8 +21,12 @@ from .text_processing import ProcessOptions, process_text
 from .voice_commands import VoiceCommand, detect_voice_command
 
 ASR_MODEL_CHOICES = (
-    "Qwen/Qwen3-ASR-1.7B",
-    "Qwen/Qwen3-ASR-0.6B",
+    "large-v3",
+    "large-v3-turbo",
+    "medium",
+    "small",
+    "base",
+    "tiny",
 )
 
 
@@ -387,7 +391,7 @@ class VoiceInputApp:
             state="normal",
         ).pack(anchor=tk.W, fill=tk.X)
         tk.Label(frame, text="ASR device").pack(anchor=tk.W, pady=(8, 0))
-        tk.OptionMenu(frame, whisper_device_var, "auto", "npu", "gpu", "cpu", "cuda").pack(anchor=tk.W, fill=tk.X)
+        tk.OptionMenu(frame, whisper_device_var, "auto", "npu", "gpu", "cpu").pack(anchor=tk.W, fill=tk.X)
         tk.Label(frame, text="ASR compute type").pack(anchor=tk.W, pady=(8, 0))
         tk.OptionMenu(
             frame,
