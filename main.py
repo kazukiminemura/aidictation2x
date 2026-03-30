@@ -25,7 +25,7 @@ DEFAULT_APP_SETTINGS = {
     "autosave_file": "data/last_session.json",
     "max_history_items": 10,
     "whisper_model_id": "openai/whisper-base",
-    "whisper_device": "auto",
+    "whisper_device": "gpu",
     "whisper_download_dir": "models/whisper",
     "llm_enabled": False,
     "llm_model_path": "OpenVINO/Qwen3-8B-int4-cw-ov",
@@ -197,6 +197,17 @@ def _resolve_default_whisper_model_id(runtime_root: Path, configured_model_id: s
     return configured or "openai/whisper-base"
 
 
+def _resolve_default_whisper_device(configured_device: str) -> str:
+    normalized = (configured_device or "").strip().lower()
+    if normalized in {"gpu", "cuda"}:
+        return "gpu"
+    if normalized == "cpu":
+        return "cpu"
+    if normalized == "npu":
+        return "npu"
+    return "gpu"
+
+
 def _whisper_dir_name(model_id: str) -> str:
     return model_id.split("/", 1)[-1].replace("/", "--")
 
@@ -247,10 +258,11 @@ def main() -> None:
         runtime_root,
         str(settings.get("whisper_model_id", "openai/whisper-base")),
     )
+    resolved_whisper_device = _resolve_default_whisper_device(str(settings.get("whisper_device", "gpu")))
 
     asr_defaults = {
         "whisper_model_id": resolved_whisper_model_id,
-        "whisper_device": str(settings.get("whisper_device", "auto")),
+        "whisper_device": resolved_whisper_device,
         "whisper_download_dir": str(
             _resolve_runtime_path(runtime_root, str(settings.get("whisper_download_dir", "models/whisper")))
         ),

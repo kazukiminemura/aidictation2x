@@ -83,7 +83,7 @@ class ASREngine:
     def __init__(
         self,
         sample_rate_hz: int,
-        device: str = "auto",
+        device: str = "gpu",
         model_id: str = _DEFAULT_MODEL_ID,
         models_root_dir: Path | None = None,
     ):
@@ -182,15 +182,14 @@ class ASREngine:
 
 
 def _to_openvino_device(device: str) -> str:
-    normalized = (device or "auto").strip().lower()
+    normalized = (device or "gpu").strip().lower()
     if normalized == "cpu":
         return "CPU"
     if normalized in {"gpu", "cuda"}:
         return "GPU"
     if normalized == "npu":
         return "NPU"
-    # auto: try NPU first, then GPU, then CPU
-    return "AUTO:NPU,GPU,CPU"
+    return "GPU"
 
 
 def _looks_like_openvino_model_dir(path: Path) -> bool:

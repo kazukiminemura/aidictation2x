@@ -85,7 +85,7 @@ class VoiceInputApp:
         self.whisper_model_id_var = tk.StringVar(
             value=str(self.asr_defaults.get("whisper_model_id", "openai/whisper-base"))
         )
-        self.whisper_device_var = tk.StringVar(value=str(self.asr_defaults.get("whisper_device", "auto")))
+        self.whisper_device_var = tk.StringVar(value=str(self.asr_defaults.get("whisper_device", "gpu")))
         # Audio input device: store as "index: name" string or "auto (system default)"
         _saved_device = self.asr_defaults.get("audio_input_device", None)
         self.audio_device_var = tk.StringVar(value=str(_saved_device) if _saved_device else "auto (system default)")
@@ -398,6 +398,20 @@ class VoiceInputApp:
         ).pack(anchor=tk.W, fill=tk.X)
         tk.Label(frame, text="Voice threshold (Continuous mode: increase if silence not detected, e.g. 0.01-0.1)").pack(anchor=tk.W, pady=(8, 0))
         tk.Entry(frame, textvariable=voice_threshold_var, width=10).pack(anchor=tk.W)
+        tk.Button(
+            frame,
+            text="Auto Adjust Voice Threshold",
+            command=lambda: auto_adjust_voice_threshold_from_dialog(),
+            bg="#6f42c1",
+            fg="#ffffff",
+            activebackground="#8250df",
+            activeforeground="#ffffff",
+            relief=tk.FLAT,
+            padx=10,
+            pady=4,
+            font=("Consolas", 9, "bold"),
+            cursor="hand2",
+        ).pack(anchor=tk.W, pady=(6, 0))
         tk.Label(frame, text="ASR model").pack(anchor=tk.W, pady=(8, 0))
         ttk.Combobox(
             frame,
@@ -406,7 +420,7 @@ class VoiceInputApp:
             state="readonly",
         ).pack(anchor=tk.W, fill=tk.X)
         tk.Label(frame, text="ASR device").pack(anchor=tk.W, pady=(8, 0))
-        tk.OptionMenu(frame, whisper_device_var, "auto", "npu", "gpu", "cpu").pack(anchor=tk.W, fill=tk.X)
+        tk.OptionMenu(frame, whisper_device_var, "gpu", "cpu", "npu").pack(anchor=tk.W, fill=tk.X)
         tk.Button(
             frame,
             text="Download and Convert ASR Model",
@@ -484,8 +498,14 @@ class VoiceInputApp:
 
         def download_asr_model_from_dialog() -> None:
             model_id = whisper_model_id_var.get().strip() or "openai/whisper-base"
-            device = whisper_device_var.get().strip() or "auto"
+            device = whisper_device_var.get().strip() or "gpu"
             self._download_asr_model_clicked(model_id=model_id, device=device)
+
+        def auto_adjust_voice_threshold_from_dialog() -> None:
+            self._auto_adjust_voice_threshold_clicked(
+                voice_threshold_var=voice_threshold_var,
+                audio_device_value=audio_device_var.get(),
+            )
 
         def apply_and_close() -> None:
             self.auto_edit_var.set(auto_edit_var.get())
@@ -564,7 +584,7 @@ class VoiceInputApp:
 
     def _apply_asr_settings(self) -> None:
         model_id = self.whisper_model_id_var.get().strip() or "openai/whisper-base"
-        device = self.whisper_device_var.get().strip() or "auto"
+        device = self.whisper_device_var.get().strip() or "gpu"
         self.asr_defaults["whisper_model_id"] = model_id
         self.asr_defaults["whisper_device"] = device
         self.asr_engine.configure(device=device, model_id=model_id)
@@ -667,6 +687,78 @@ class VoiceInputApp:
             time.sleep(1.0)
         download_thread.join()
         self.root.after(0, self._on_download_model_done, result["model_path"], result["error"])
+
+    def _auto_adjust_voice_threshold_clicked(self, voice_threshold_var: tk.StringVar, audio_device_value: str) -> None:
+        self.status_var.set("Calibrating voice threshold... speak normally for 3 seconds")
+        threading.Thread(
+            target=self._auto_adjust_voice_threshold_worker,
+            args=(voice_threshold_var, audio_device_value),
+            daemon=True,
+        ).start()
+
+    def _auto_adjust_voice_threshold_worker(self, voice_threshold_var: tk.StringVar, audio_device_value: str) -> None:
+        try:
+            threshold = self._measure_voice_threshold(audio_device_value=audio_device_value)
+        except Exception as exc:  # noqa: BLE001
+            self.logger.exception("Voice threshold calibration failed")
+            self.root.after(0, self._on_auto_adjust_voice_threshold_done, voice_threshold_var, None, str(exc))
+            return
+        self.root.after(0, self._on_auto_adjust_voice_threshold_done, voice_threshold_var, threshold, "")
+
+    def _on_auto_adjust_voice_threshold_done(
+        self,
+        voice_threshold_var: tk.StringVar,
+        threshold: float | None,
+        error: str,
+    ) -> None:
+        if error:
+            self.status_var.set("Voice threshold calibration failed")
+            messagebox.showerror("Voice threshold", f"Auto adjust failed:\n{error}")
+            return
+        assert threshold is not None
+        formatted = f"{threshold:.4f}"
+        voice_threshold_var.set(formatted)
+        self.voice_threshold_var.set(formatted)
+        self.asr_defaults["voice_threshold"] = threshold
+        self.continuous_listener.voice_threshold = threshold
+        self.status_var.set(f"Voice threshold calibrated: {formatted}")
+
+    def _measure_voice_threshold(self, audio_device_value: str, duration_s: float = 3.0) -> float:
+        frames = max(1, int(self.recorder.config.sample_rate_hz * duration_s))
+        kwargs: dict = {
+            "frames": frames,
+            "samplerate": self.recorder.config.sample_rate_hz,
+            "channels": self.recorder.config.channels,
+            "dtype": "float32",
+            "blocking": True,
+        }
+        device = _parse_device_choice(audio_device_value)
+        if device is not None:
+            kwargs["device"] = device
+
+        sample = sd.rec(**kwargs)
+        audio = np.asarray(sample, dtype=np.float32).reshape(-1)
+        if audio.size == 0:
+            return 0.01
+
+        chunk = max(1, int(self.recorder.config.sample_rate_hz * 0.03))
+        energies = [
+            float(np.mean(np.abs(audio[start : start + chunk])))
+            for start in range(0, int(audio.size), chunk)
+            if audio[start : start + chunk].size > 0
+        ]
+        if not energies:
+            return 0.01
+
+        energies_np = np.asarray(energies, dtype=np.float32)
+        noise_floor = float(np.percentile(energies_np, 20))
+        speech_level = float(np.percentile(energies_np, 90))
+        if speech_level <= 0:
+            return 0.01
+
+        threshold = noise_floor + (speech_level - noise_floor) * 0.35
+        threshold = max(0.003, min(threshold, speech_level * 0.8, 0.1))
+        return round(float(threshold), 4)
 
     def _on_download_model_done(self, model_path: str, error: str) -> None:
         if error:
@@ -1132,7 +1224,7 @@ class VoiceInputApp:
         if "asr_failed_all_windows" in normalized:
             return (
                 "ASR failed on all audio windows.\n"
-                "Try a shorter recording and switch ASR device (auto/cpu) in Properties."
+                "Try a shorter recording and switch ASR device (gpu/cpu) in Properties."
             )
         if "qwen_asr_not_installed" in normalized:
             return "Qwen ASR backend is not installed. Run: pip install -r requirements.txt"
@@ -1161,7 +1253,7 @@ def build_app(
     engine = ASREngine(
         sample_rate_hz=audio_config.sample_rate_hz,
         model_id=str(asr_defaults.get("whisper_model_id", "openai/whisper-base")),
-        device=str(asr_defaults.get("whisper_device", "auto")),
+        device=str(asr_defaults.get("whisper_device", "gpu")),
         models_root_dir=whisper_download_dir,
     )
     saved_device_str = asr_defaults.get("audio_input_device", None)
