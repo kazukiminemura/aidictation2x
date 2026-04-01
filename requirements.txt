@@ -7,7 +7,9 @@ openvino>=2025.0.0
 openvino-genai>=2025.0.0
 openvino-tokenizers>=2025.0.0
 huggingface-hub>=0.29.0
+qwen-asr>=0.0.6
+transformers>=4.45,<4.58
 optimum-intel>=1.27.0
-transformers>=4.57.0
+torch>=2.6.0
 pyinstaller>=6.0.0
 pytest==8.3.5

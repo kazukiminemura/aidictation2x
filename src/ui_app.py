@@ -86,7 +86,7 @@ class VoiceInputApp:
         self.continuous_hotkey_pressed = False
         self.llm_enabled_var = tk.BooleanVar(value=bool(self.llm_defaults.get("enabled", False)))
         self.whisper_model_id_var = tk.StringVar(
-            value=str(self.asr_defaults.get("whisper_model_id", "openai/whisper-base"))
+            value=str(self.asr_defaults.get("whisper_model_id", "Qwen/Qwen3-ASR-1.7B"))
         )
         self.whisper_device_var = tk.StringVar(value=str(self.asr_defaults.get("whisper_device", "gpu")))
         # Audio input device: store as "index: name" string or "auto (system default)"
@@ -322,10 +322,11 @@ class VoiceInputApp:
                     "ASR2X is ready.\n\n"
                     "Quick start:\n"
                     "1. Right-click -> Properties\n"
-                    "2. Download and Convert ASR Model\n"
+                    "2. Download ASR Model\n"
                     "3. Press Start Recording or use Ctrl+Space\n"
                     "4. Toggle Continuous with Ctrl+Alt+Space\n\n"
-                    "Default model: openai/whisper-base"
+                    "Default model: Qwen/Qwen3-ASR-1.7B\n"
+                    "Other models: Qwen/Qwen3-ASR-0.6B / openai/whisper-base / openai/whisper-large-v3-turbo"
                 ),
             )
         self._set_text(
@@ -333,14 +334,14 @@ class VoiceInputApp:
             (
                 "Your final text will appear here.\n\n"
                 "Recommended first run:\n"
-                "- Use whisper-base for the fastest setup\n"
+                "- Choose Qwen or Whisper IR model in Properties\n"
                 "- Turn on LLM correction later if needed"
             ),
         )
         if self.asr_engine.get_model_dir().exists():
             self.status_var.set("Ready (Ctrl+Space / Ctrl+Shift+Space / Ctrl+Alt+Space)")
         else:
-            self.status_var.set("Ready - Right-click -> Properties -> Download and Convert ASR Model")
+            self.status_var.set("Ready - Right-click -> Properties -> Download ASR Model")
 
     def _bind_hotkeys(self) -> None:
         self.root.bind_all("<KeyPress-space>", self._on_space_hotkey_press)
@@ -432,7 +433,7 @@ class VoiceInputApp:
         tk.OptionMenu(frame, whisper_device_var, "gpu", "cpu", "npu").pack(anchor=tk.W, fill=tk.X)
         tk.Button(
             frame,
-            text="Download and Convert ASR Model",
+            text="Download ASR Model",
             command=lambda: download_asr_model_from_dialog(),
             bg="#1f6feb",
             fg="#ffffff",
@@ -568,7 +569,7 @@ class VoiceInputApp:
         self._refresh_dictionary_list()
 
         def download_asr_model_from_dialog() -> None:
-            model_id = whisper_model_id_var.get().strip() or "openai/whisper-base"
+            model_id = whisper_model_id_var.get().strip() or "Qwen/Qwen3-ASR-1.7B"
             device = whisper_device_var.get().strip() or "gpu"
             self._download_asr_model_clicked(model_id=model_id, device=device)
 
@@ -676,7 +677,7 @@ class VoiceInputApp:
             self.status_var.set("System-wide input: OFF")
 
     def _apply_asr_settings(self) -> None:
-        model_id = self.whisper_model_id_var.get().strip() or "openai/whisper-base"
+        model_id = self.whisper_model_id_var.get().strip() or "Qwen/Qwen3-ASR-1.7B"
         device = self.whisper_device_var.get().strip() or "gpu"
         self.asr_defaults["whisper_model_id"] = model_id
         self.asr_defaults["whisper_device"] = device
@@ -875,15 +876,20 @@ class VoiceInputApp:
                 "Downloader component (huggingface_hub) is missing in this build.\n"
                 "Please install a newer installer build that includes downloader dependencies."
             )
+        if "qwen_asr_not_installed" in raw:
+            return (
+                "Qwen ASR dependencies are missing in this build.\n"
+                "Please install dependencies with 'pip install -r requirements.txt'."
+            )
         if "openvino_export_dependencies_not_installed" in raw:
             return (
-                "ASR conversion dependencies are missing in this build.\n"
+                "Whisper IR conversion dependencies are missing in this build.\n"
                 "Please install dependencies with 'pip install -r requirements.txt'."
             )
         if "unsupported_asr_model" in raw:
             return (
                 "Unsupported ASR model was selected.\n"
-                "Choose one of the supported Whisper models in Properties."
+                "Choose one of the supported ASR models in Properties."
             )
         if "model_not_found_and_auto_download_disabled" in raw:
             return (
@@ -1583,6 +1589,8 @@ class VoiceInputApp:
             )
         if "qwen_asr_not_installed" in normalized:
             return "Qwen ASR backend is not installed. Run: pip install -r requirements.txt"
+        if "openvino_export_dependencies_not_installed" in normalized:
+            return "Whisper IR conversion dependencies are missing. Run: pip install -r requirements.txt"
         if "torch_not_installed" in normalized:
             return "PyTorch is not installed. Run: pip install -r requirements.txt"
         if "vector too long" in raw.lower():
@@ -1604,12 +1612,13 @@ def build_app(
     llm_defaults: dict,
     asr_defaults: dict,
 ) -> VoiceInputApp:
-    whisper_download_dir = root_dir / str(asr_defaults.get("whisper_download_dir", "models/whisper"))
+    whisper_download_dir = root_dir / str(asr_defaults.get("whisper_download_dir", "models/asr"))
     engine = ASREngine(
         sample_rate_hz=audio_config.sample_rate_hz,
-        model_id=str(asr_defaults.get("whisper_model_id", "openai/whisper-base")),
+        model_id=str(asr_defaults.get("whisper_model_id", "Qwen/Qwen3-ASR-1.7B")),
         device=str(asr_defaults.get("whisper_device", "gpu")),
         models_root_dir=whisper_download_dir,
+        language=str(asr_defaults.get("asr_language", "ja")),
     )
     saved_device_str = asr_defaults.get("audio_input_device", None)
     audio_config.device = _parse_device_choice(str(saved_device_str)) if saved_device_str else None

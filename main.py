@@ -24,9 +24,10 @@ DEFAULT_APP_SETTINGS = {
     "history_file": "data/history.json",
     "autosave_file": "data/last_session.json",
     "max_history_items": 10,
-    "whisper_model_id": "openai/whisper-base",
+    "whisper_model_id": "Qwen/Qwen3-ASR-1.7B",
     "whisper_device": "gpu",
-    "whisper_download_dir": "models/whisper",
+    "whisper_download_dir": "models/asr",
+    "asr_language": "ja",
     "llm_enabled": False,
     "llm_model_path": "OpenVINO/Qwen3-8B-int4-cw-ov",
     "llm_strength": "medium",
@@ -191,17 +192,11 @@ def _resolve_model_path(runtime_root: Path, raw_value: str) -> str:
     return raw_value
 
 
-def _resolve_default_whisper_model_id(runtime_root: Path, configured_model_id: str) -> str:
-    models_root = _resolve_runtime_path(runtime_root, "models/whisper")
+def _resolve_default_whisper_model_id(configured_model_id: str) -> str:
     configured = (configured_model_id or "").strip()
-    if configured and _looks_like_openvino_whisper_dir(models_root / _whisper_dir_name(configured)):
+    if configured in get_supported_model_ids():
         return configured
-
-    for model_id in get_supported_model_ids():
-        if _looks_like_openvino_whisper_dir(models_root / _whisper_dir_name(model_id)):
-            return model_id
-
-    return configured or "openai/whisper-base"
+    return "Qwen/Qwen3-ASR-1.7B"
 
 
 def _resolve_default_whisper_device(configured_device: str) -> str:
@@ -213,24 +208,6 @@ def _resolve_default_whisper_device(configured_device: str) -> str:
     if normalized == "npu":
         return "npu"
     return "gpu"
-
-
-def _whisper_dir_name(model_id: str) -> str:
-    return model_id.split("/", 1)[-1].replace("/", "--")
-
-
-def _looks_like_openvino_whisper_dir(path: Path) -> bool:
-    if not path.exists() or not path.is_dir():
-        return False
-    required = (
-        "openvino_encoder_model.xml",
-        "openvino_encoder_model.bin",
-        "openvino_decoder_model.xml",
-        "openvino_decoder_model.bin",
-        "openvino_tokenizer.xml",
-        "openvino_tokenizer.bin",
-    )
-    return all((path / name).exists() for name in required)
 
 
 def main() -> None:
@@ -262,8 +239,7 @@ def main() -> None:
     )
 
     resolved_whisper_model_id = _resolve_default_whisper_model_id(
-        runtime_root,
-        str(settings.get("whisper_model_id", "openai/whisper-base")),
+        str(settings.get("whisper_model_id", "Qwen/Qwen3-ASR-1.7B")),
     )
     resolved_whisper_device = _resolve_default_whisper_device(str(settings.get("whisper_device", "gpu")))
 
@@ -271,8 +247,9 @@ def main() -> None:
         "whisper_model_id": resolved_whisper_model_id,
         "whisper_device": resolved_whisper_device,
         "whisper_download_dir": str(
-            _resolve_runtime_path(runtime_root, str(settings.get("whisper_download_dir", "models/whisper")))
+            _resolve_runtime_path(runtime_root, str(settings.get("whisper_download_dir", "models/asr")))
         ),
+        "asr_language": str(settings.get("asr_language", "ja")),
     }
     personal_dictionary = PersonalDictionary(
         _resolve_runtime_path(runtime_root, settings.get("personal_dictionary_file", "config/personal_dictionary.json"))
