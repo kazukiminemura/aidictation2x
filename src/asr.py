@@ -103,8 +103,7 @@ class _QwenASREngine:
         if audio_data.size == 0:
             return ""
         results = self.model.transcribe(
-            audio=np.asarray(audio_data, dtype=np.float32),
-            sample_rate=sample_rate_hz,
+            audio=(np.asarray(audio_data, dtype=np.float32), int(sample_rate_hz)),
             language=self.language,
         )
         if not results:

@@ -2,9 +2,10 @@ import sys
 import types
 from pathlib import Path
 
+import numpy as np
 import pytest
 
-from src.asr import ASREngine, _dedupe_repeated_text
+from src.asr import ASREngine, _QwenASREngine, _dedupe_repeated_text
 
 
 @pytest.mark.parametrize(
@@ -122,9 +123,45 @@ def test_convert_model_exports_supported_whisper_ir_models(
     [
         ("same sentence. same sentence.", "same sentence."),
         ("hello hello", "hello hello"),
-        ("konnichiwa konnichiwa", "konnichiwa"),
+        ("konnichiwa konnichiwa", "konnichiwa konnichiwa"),
         ("test. test. next.", "test. next."),
     ],
 )
 def test_dedupe_repeated_text(raw_text: str, expected: str) -> None:
     assert _dedupe_repeated_text(raw_text) == expected
+
+
+def test_qwen_engine_transcribe_passes_audio_tuple(monkeypatch) -> None:
+    calls: dict[str, object] = {}
+
+    class FakeTorch:
+        bfloat16 = "bfloat16"
+        float32 = "float32"
+
+    class FakeModel:
+        def transcribe(self, *, audio: object, language: str | None) -> list[object]:
+            calls["audio"] = audio
+            calls["language"] = language
+            return [types.SimpleNamespace(text=" hello ")]
+
+    class FakeQwen3ASRModel:
+        @staticmethod
+        def from_pretrained(*args, **kwargs) -> FakeModel:  # noqa: ANN002, ANN003
+            return FakeModel()
+
+    qwen_module = types.ModuleType("qwen_asr")
+    qwen_module.Qwen3ASRModel = FakeQwen3ASRModel
+    torch_module = types.ModuleType("torch")
+    torch_module.bfloat16 = FakeTorch.bfloat16
+    torch_module.float32 = FakeTorch.float32
+
+    monkeypatch.setitem(sys.modules, "qwen_asr", qwen_module)
+    monkeypatch.setitem(sys.modules, "torch", torch_module)
+
+    engine = _QwenASREngine(model_source="dummy", device="cpu", language="ja")
+    text = engine.transcribe(np.array([0.1, -0.2], dtype=np.float32), 22050)
+
+    assert text == "hello"
+    assert isinstance(calls["audio"], tuple)
+    assert calls["audio"][1] == 22050
+    assert np.array_equal(calls["audio"][0], np.array([0.1, -0.2], dtype=np.float32))
