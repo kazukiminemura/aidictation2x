@@ -18,6 +18,7 @@ from .personal_dictionary import PersonalDictionary
 from .storage import Storage
 from .app_launcher import AppLauncher
 from .continuous_listener import ContinuousListener
+from .display_controls import DisplayController
 from .system_wide_input import SystemWideInput
 from .text_processing import ProcessOptions, process_text
 from .voice_commands import VoiceCommand, detect_voice_command
@@ -119,6 +120,7 @@ class VoiceInputApp:
             voice_threshold=float(self.voice_threshold_var.get()),
         )
         self.app_launcher = AppLauncher()
+        self.display_controller = DisplayController()
 
         self._build_ui()
         self._bind_hotkeys()
@@ -214,7 +216,7 @@ class VoiceInputApp:
         ).pack(fill=tk.X)
         tk.Label(
             system_frame,
-            text="Voice cmds: クリア / コピー / プロパティ / 検索 [語句] / [語句] を開く / [語句] に飛ぶ / リンク [URL] / 一つ前へ / 一つ先に / 辞書登録 [読み] [表記] / 辞書削除 [読み]",
+            text="Voice cmds: クリア / コピー / プロパティ / 明るさ 70 / 明るさを上げて / 夜間モード オン / ナイトライト 45 / 検索 [語句] / [語句] を開く / [語句] に飛ぶ / リンク [URL] / 一つ前へ / 一つ先に / 辞書登録 [読み] [表記] / 辞書削除 [読み]",
             fg="#5a7a9b",
             bg="#0a0e14",
             anchor="w",
@@ -360,7 +362,7 @@ class VoiceInputApp:
 
         win = tk.Toplevel(self.root)
         win.title("Properties")
-        win.geometry("420x700")
+        win.geometry("420x820")
         win.resizable(False, False)
         win.transient(self.root)
         self.properties_window = win
@@ -375,6 +377,9 @@ class VoiceInputApp:
         whisper_device_var = tk.StringVar(value=self.whisper_device_var.get())
         audio_device_var = tk.StringVar(value=self.audio_device_var.get())
         voice_threshold_var = tk.StringVar(value=self.voice_threshold_var.get())
+        brightness_var = tk.StringVar(value="")
+        night_light_strength_var = tk.StringVar(value="")
+        display_status_var = tk.StringVar(value="Display controls: loading...")
 
         frame = tk.Frame(win, padx=12, pady=12)
         frame.pack(fill=tk.BOTH, expand=True)
@@ -451,6 +456,68 @@ class VoiceInputApp:
             cursor="hand2",
         ).pack(anchor=tk.W, pady=(10, 0))
 
+        display_frame = tk.Frame(frame, highlightthickness=1, highlightbackground="#273142")
+        display_frame.pack(fill=tk.X, pady=(12, 0))
+        tk.Label(
+            display_frame,
+            text="Display",
+            anchor="w",
+            font=("Consolas", 9, "bold"),
+        ).pack(fill=tk.X, padx=6, pady=(6, 2))
+        tk.Label(
+            display_frame,
+            textvariable=display_status_var,
+            anchor="w",
+            justify=tk.LEFT,
+            font=("Consolas", 8),
+        ).pack(fill=tk.X, padx=6, pady=(0, 6))
+
+        brightness_row = tk.Frame(display_frame)
+        brightness_row.pack(fill=tk.X, padx=6, pady=(0, 6))
+        tk.Label(brightness_row, text="Brightness", font=("Consolas", 9)).pack(side=tk.LEFT)
+        tk.Button(brightness_row, text="-10", width=5, command=lambda: self._change_brightness_clicked(-10, display_status_var)).pack(side=tk.LEFT, padx=(8, 4))
+        tk.Button(brightness_row, text="+10", width=5, command=lambda: self._change_brightness_clicked(10, display_status_var)).pack(side=tk.LEFT, padx=(0, 8))
+        tk.Entry(brightness_row, textvariable=brightness_var, width=6, relief=tk.FLAT).pack(side=tk.LEFT)
+        tk.Button(
+            brightness_row,
+            text="Set",
+            width=5,
+            command=lambda: self._set_brightness_clicked(brightness_var, display_status_var),
+        ).pack(side=tk.LEFT, padx=(6, 0))
+
+        night_light_row = tk.Frame(display_frame)
+        night_light_row.pack(fill=tk.X, padx=6, pady=(0, 6))
+        tk.Label(night_light_row, text="Night Light", font=("Consolas", 9)).pack(side=tk.LEFT)
+        tk.Button(
+            night_light_row,
+            text="On",
+            width=5,
+            command=lambda: self._set_night_light_enabled_clicked(True, display_status_var),
+        ).pack(side=tk.LEFT, padx=(8, 4))
+        tk.Button(
+            night_light_row,
+            text="Off",
+            width=5,
+            command=lambda: self._set_night_light_enabled_clicked(False, display_status_var),
+        ).pack(side=tk.LEFT, padx=(0, 4))
+        tk.Button(
+            night_light_row,
+            text="Toggle",
+            width=6,
+            command=lambda: self._toggle_night_light_clicked(display_status_var),
+        ).pack(side=tk.LEFT)
+
+        night_light_strength_row = tk.Frame(display_frame)
+        night_light_strength_row.pack(fill=tk.X, padx=6, pady=(0, 6))
+        tk.Label(night_light_strength_row, text="Warmth %", font=("Consolas", 9)).pack(side=tk.LEFT)
+        tk.Entry(night_light_strength_row, textvariable=night_light_strength_var, width=6, relief=tk.FLAT).pack(side=tk.LEFT, padx=(8, 6))
+        tk.Button(
+            night_light_strength_row,
+            text="Set",
+            width=5,
+            command=lambda: self._set_night_light_strength_clicked(night_light_strength_var, display_status_var),
+        ).pack(side=tk.LEFT)
+
         dict_frame = tk.Frame(frame, highlightthickness=1, highlightbackground="#273142")
         dict_frame.pack(fill=tk.X, pady=(12, 0))
         tk.Label(
@@ -508,6 +575,9 @@ class VoiceInputApp:
                 audio_device_value=audio_device_var.get(),
             )
 
+        def refresh_display_controls_from_dialog() -> None:
+            self._refresh_display_controls(brightness_var, night_light_strength_var, display_status_var)
+
         def apply_and_close() -> None:
             self.auto_edit_var.set(auto_edit_var.get())
             self.remove_fillers_var.set(remove_fillers_var.get())
@@ -552,6 +622,8 @@ class VoiceInputApp:
         buttons.pack(fill=tk.X, pady=(12, 8), before=dict_frame)
         tk.Button(buttons, text="Apply", command=apply_and_close, width=10).pack(side=tk.LEFT)
         tk.Button(buttons, text="Cancel", command=win.destroy, width=10).pack(side=tk.RIGHT)
+
+        refresh_display_controls_from_dialog()
 
         def on_close() -> None:
             self.dict_reading_entry = None
@@ -1121,6 +1193,25 @@ class VoiceInputApp:
             query = cmd.args.get("query", "")
             threading.Thread(target=self._close_app_worker, args=(query,), daemon=True).start()
 
+        elif cmd.action == "display_brightness_adjust":
+            delta = int(cmd.args.get("delta", 0))
+            threading.Thread(target=self._brightness_adjust_worker, args=(delta,), daemon=True).start()
+
+        elif cmd.action == "display_brightness_set":
+            level = int(cmd.args.get("level", 0))
+            threading.Thread(target=self._brightness_set_worker, args=(level,), daemon=True).start()
+
+        elif cmd.action == "night_light_toggle":
+            threading.Thread(target=self._night_light_toggle_worker, daemon=True).start()
+
+        elif cmd.action == "night_light_set_enabled":
+            enabled = bool(cmd.args.get("enabled", False))
+            threading.Thread(target=self._night_light_set_enabled_worker, args=(enabled,), daemon=True).start()
+
+        elif cmd.action == "night_light_strength_set":
+            strength = int(cmd.args.get("strength", 0))
+            threading.Thread(target=self._night_light_strength_set_worker, args=(strength,), daemon=True).start()
+
     def _launch_app_worker(self, query: str) -> None:
         try:
             label = self.app_launcher.launch(query)
@@ -1188,6 +1279,185 @@ class VoiceInputApp:
         except Exception as exc:  # noqa: BLE001
             self.logger.exception("Failed to close app: %s", query)
             self.root.after(0, self.status_var.set, f"終了エラー: {exc}")
+
+    def _brightness_adjust_worker(self, delta: int) -> None:
+        try:
+            level = self.display_controller.change_brightness(delta)
+            self.root.after(0, self.status_var.set, f"明るさを {level}% にしました")
+        except Exception as exc:  # noqa: BLE001
+            self.logger.exception("Failed to adjust brightness")
+            self.root.after(0, self.status_var.set, f"明るさ変更エラー: {exc}")
+
+    def _brightness_set_worker(self, level: int) -> None:
+        try:
+            actual = self.display_controller.set_brightness(level)
+            self.root.after(0, self.status_var.set, f"明るさを {actual}% にしました")
+        except Exception as exc:  # noqa: BLE001
+            self.logger.exception("Failed to set brightness")
+            self.root.after(0, self.status_var.set, f"明るさ変更エラー: {exc}")
+
+    def _night_light_toggle_worker(self) -> None:
+        try:
+            enabled = self.display_controller.toggle_night_light()
+            label = "オン" if enabled else "オフ"
+            self.root.after(0, self.status_var.set, f"夜間モードを {label} にしました")
+        except Exception as exc:  # noqa: BLE001
+            self.logger.exception("Failed to toggle Night Light")
+            self.root.after(0, self.status_var.set, f"夜間モード変更エラー: {exc}")
+
+    def _night_light_set_enabled_worker(self, enabled: bool) -> None:
+        try:
+            if enabled:
+                self.display_controller.enable_night_light()
+            else:
+                self.display_controller.disable_night_light()
+            label = "オン" if enabled else "オフ"
+            self.root.after(0, self.status_var.set, f"夜間モードを {label} にしました")
+        except Exception as exc:  # noqa: BLE001
+            self.logger.exception("Failed to set Night Light enabled=%s", enabled)
+            self.root.after(0, self.status_var.set, f"夜間モード変更エラー: {exc}")
+
+    def _night_light_strength_set_worker(self, strength: int) -> None:
+        try:
+            actual = self.display_controller.set_night_light_strength(strength)
+            self.root.after(0, self.status_var.set, f"夜間モードの強さを {actual}% にしました")
+        except Exception as exc:  # noqa: BLE001
+            self.logger.exception("Failed to set Night Light strength")
+            self.root.after(0, self.status_var.set, f"夜間モード変更エラー: {exc}")
+
+    def _refresh_display_controls(
+        self,
+        brightness_var: tk.StringVar,
+        night_light_strength_var: tk.StringVar,
+        display_status_var: tk.StringVar,
+    ) -> None:
+        def worker() -> None:
+            try:
+                state = self.display_controller.get_state()
+                brightness_text = "-" if state.brightness is None else f"{state.brightness}"
+                enabled_text = "-"
+                if state.night_light_enabled is True:
+                    enabled_text = "On"
+                elif state.night_light_enabled is False:
+                    enabled_text = "Off"
+                strength_text = "" if state.night_light_strength is None else f"{state.night_light_strength}"
+                summary = f"Brightness: {brightness_text}% | Night Light: {enabled_text}"
+
+                def update_ui() -> None:
+                    if state.brightness is not None:
+                        brightness_var.set(str(state.brightness))
+                    if state.night_light_strength is not None:
+                        night_light_strength_var.set(str(state.night_light_strength))
+                    display_status_var.set(summary)
+
+                self.root.after(0, update_ui)
+            except Exception as exc:  # noqa: BLE001
+                self.root.after(0, display_status_var.set, f"Display controls unavailable: {exc}")
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _change_brightness_clicked(self, delta: int, display_status_var: tk.StringVar) -> None:
+        display_status_var.set("Updating brightness...")
+        threading.Thread(
+            target=self._change_brightness_from_dialog_worker,
+            args=(delta, display_status_var),
+            daemon=True,
+        ).start()
+
+    def _change_brightness_from_dialog_worker(self, delta: int, display_status_var: tk.StringVar) -> None:
+        try:
+            level = self.display_controller.change_brightness(delta)
+            self.root.after(0, display_status_var.set, f"Brightness: {level}% | Night Light: unchanged")
+            self.root.after(0, self.status_var.set, f"明るさを {level}% にしました")
+        except Exception as exc:  # noqa: BLE001
+            self.root.after(0, display_status_var.set, f"Brightness update failed: {exc}")
+
+    def _set_brightness_clicked(self, brightness_var: tk.StringVar, display_status_var: tk.StringVar) -> None:
+        try:
+            level = int(brightness_var.get().strip())
+        except ValueError:
+            display_status_var.set("Brightness must be a number between 0 and 100")
+            return
+        display_status_var.set("Updating brightness...")
+        threading.Thread(
+            target=self._set_brightness_from_dialog_worker,
+            args=(level, display_status_var),
+            daemon=True,
+        ).start()
+
+    def _set_brightness_from_dialog_worker(self, level: int, display_status_var: tk.StringVar) -> None:
+        try:
+            actual = self.display_controller.set_brightness(level)
+            self.root.after(0, display_status_var.set, f"Brightness: {actual}% | Night Light: unchanged")
+            self.root.after(0, self.status_var.set, f"明るさを {actual}% にしました")
+        except Exception as exc:  # noqa: BLE001
+            self.root.after(0, display_status_var.set, f"Brightness update failed: {exc}")
+
+    def _set_night_light_enabled_clicked(self, enabled: bool, display_status_var: tk.StringVar) -> None:
+        display_status_var.set("Updating Night Light...")
+        threading.Thread(
+            target=self._set_night_light_enabled_from_dialog_worker,
+            args=(enabled, display_status_var),
+            daemon=True,
+        ).start()
+
+    def _set_night_light_enabled_from_dialog_worker(self, enabled: bool, display_status_var: tk.StringVar) -> None:
+        try:
+            if enabled:
+                self.display_controller.enable_night_light()
+            else:
+                self.display_controller.disable_night_light()
+            label = "On" if enabled else "Off"
+            self.root.after(0, display_status_var.set, f"Brightness: unchanged | Night Light: {label}")
+            self.root.after(0, self.status_var.set, f"夜間モードを {'オン' if enabled else 'オフ'} にしました")
+        except Exception as exc:  # noqa: BLE001
+            self.root.after(0, display_status_var.set, f"Night Light update failed: {exc}")
+
+    def _toggle_night_light_clicked(self, display_status_var: tk.StringVar) -> None:
+        display_status_var.set("Updating Night Light...")
+        threading.Thread(
+            target=self._toggle_night_light_from_dialog_worker,
+            args=(display_status_var,),
+            daemon=True,
+        ).start()
+
+    def _toggle_night_light_from_dialog_worker(self, display_status_var: tk.StringVar) -> None:
+        try:
+            enabled = self.display_controller.toggle_night_light()
+            label = "On" if enabled else "Off"
+            self.root.after(0, display_status_var.set, f"Brightness: unchanged | Night Light: {label}")
+            self.root.after(0, self.status_var.set, f"夜間モードを {'オン' if enabled else 'オフ'} にしました")
+        except Exception as exc:  # noqa: BLE001
+            self.root.after(0, display_status_var.set, f"Night Light update failed: {exc}")
+
+    def _set_night_light_strength_clicked(
+        self,
+        strength_var: tk.StringVar,
+        display_status_var: tk.StringVar,
+    ) -> None:
+        try:
+            strength = int(strength_var.get().strip())
+        except ValueError:
+            display_status_var.set("Night Light strength must be a number between 0 and 100")
+            return
+        display_status_var.set("Updating Night Light...")
+        threading.Thread(
+            target=self._set_night_light_strength_from_dialog_worker,
+            args=(strength, display_status_var),
+            daemon=True,
+        ).start()
+
+    def _set_night_light_strength_from_dialog_worker(
+        self,
+        strength: int,
+        display_status_var: tk.StringVar,
+    ) -> None:
+        try:
+            actual = self.display_controller.set_night_light_strength(strength)
+            self.root.after(0, display_status_var.set, f"Brightness: unchanged | Night Light warmth: {actual}%")
+            self.root.after(0, self.status_var.set, f"夜間モードの強さを {actual}% にしました")
+        except Exception as exc:  # noqa: BLE001
+            self.root.after(0, display_status_var.set, f"Night Light update failed: {exc}")
 
     def _apply_results(
         self,

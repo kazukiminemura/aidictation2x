@@ -80,6 +80,31 @@ def detect_voice_command(text: str) -> Optional[VoiceCommand]:
     if re.match(r'^(?:プロパティ|設定を開く|設定|プロパティを開く)$', t):
         return VoiceCommand("properties", {})
 
+    # --- Display brightness ---
+    m = re.match(r'^(?:明るさ|画面の明るさ)\s*(?:を)?\s*(\d{1,3})\s*(?:%|パーセント)?\s*(?:にして|にする|へ変更|へして)?$', t)
+    if m:
+        return VoiceCommand("display_brightness_set", {"level": int(m.group(1))})
+
+    if re.match(r'^(?:明るさ|画面の明るさ)\s*(?:を)?\s*(?:上げて|明るくして|アップ|増やして)$', t):
+        return VoiceCommand("display_brightness_adjust", {"delta": 10})
+
+    if re.match(r'^(?:明るさ|画面の明るさ)\s*(?:を)?\s*(?:下げて|暗くして|ダウン|減らして)$', t):
+        return VoiceCommand("display_brightness_adjust", {"delta": -10})
+
+    # --- Night Light ---
+    m = re.match(r'^(?:夜間モード|ナイトライト)\s*(?:を)?\s*(\d{1,3})\s*(?:%|パーセント)?\s*(?:にして|にする|へ変更|へして)?$', t)
+    if m:
+        return VoiceCommand("night_light_strength_set", {"strength": int(m.group(1))})
+
+    if re.match(r'^(?:夜間モード|ナイトライト)\s*(?:を)?\s*(?:オン|つけて|有効|有効にして)$', t):
+        return VoiceCommand("night_light_set_enabled", {"enabled": True})
+
+    if re.match(r'^(?:夜間モード|ナイトライト)\s*(?:を)?\s*(?:オフ|消して|無効|無効にして)$', t):
+        return VoiceCommand("night_light_set_enabled", {"enabled": False})
+
+    if re.match(r'^(?:夜間モード|ナイトライト)\s*(?:を)?\s*(?:切り替え|トグル)$', t):
+        return VoiceCommand("night_light_toggle", {})
+
     # --- Browser navigation ---
     if re.match(r'^(?:ブラウザ)?\s*(?:戻る|前へ|ひとつ前へ|一つ前へ)$', t):
         return VoiceCommand("browser_back", {})
