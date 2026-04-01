@@ -60,6 +60,13 @@ def setup_logging(level: str, runtime_root: Path | None = None) -> None:
         force=True,
         handlers=handlers,
     )
+    for noisy_logger_name in (
+        "screen_brightness_control",
+        "screen_brightness_control.windows",
+        "screen_brightness_control.windows.VCP",
+        "x_wmi",
+    ):
+        logging.getLogger(noisy_logger_name).setLevel(logging.ERROR)
 
 
 def _ensure_standard_streams() -> None:

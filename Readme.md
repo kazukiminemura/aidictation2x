@@ -6,6 +6,7 @@ and then post-edits text with a local OpenVINO LLM backend.
 ## Features
 - Push-to-talk recording (`Ctrl+Space`)
 - Optional system-wide paste (`Ctrl+Shift+Space`)
+- Continuous recording toggle (`Ctrl+Alt+Space`)
 - Local ASR (Whisper / Qwen3-ASR-1.7B)
 - Rule-based cleanup (fillers, habits, punctuation)
 - Personal dictionary (reading -> surface)

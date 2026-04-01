@@ -83,6 +83,7 @@ class VoiceInputApp:
         self.status_var = tk.StringVar(value="Starting...")
         self.current_raw_text = ""
         self.hotkey_pressed = False
+        self.continuous_hotkey_pressed = False
         self.llm_enabled_var = tk.BooleanVar(value=bool(self.llm_defaults.get("enabled", False)))
         self.whisper_model_id_var = tk.StringVar(
             value=str(self.asr_defaults.get("whisper_model_id", "openai/whisper-base"))
@@ -111,6 +112,7 @@ class VoiceInputApp:
         self.system_wide_input = SystemWideInput(
             dispatch_on_ui=lambda cb: self.root.after(0, cb),
             on_toggle=self.toggle_recording,
+            on_toggle_continuous=self._toggle_continuous,
         )
 
         self.continuous_listener = ContinuousListener(
@@ -208,7 +210,7 @@ class VoiceInputApp:
         system_frame.pack(fill=tk.X, pady=(0, 8))
         tk.Label(
             system_frame,
-            text="Global hotkey: Ctrl+Shift+Space",
+            text="Hotkeys: Ctrl+Space / Ctrl+Shift+Space = record, Ctrl+Alt+Space = continuous",
             fg="#8b9fb6",
             bg="#0a0e14",
             anchor="w",
@@ -310,7 +312,7 @@ class VoiceInputApp:
             self._set_text(self.final_text, auto.final_text)
             if self.asr_text is not None:
                 self._set_text(self.asr_text, auto.raw_text)
-            self.status_var.set("Ready (Ctrl+Space / Ctrl+Shift+Space)")
+            self.status_var.set("Ready (Ctrl+Space / Ctrl+Shift+Space / Ctrl+Alt+Space)")
             return
 
         if self.asr_text is not None:
@@ -321,7 +323,8 @@ class VoiceInputApp:
                     "Quick start:\n"
                     "1. Right-click -> Properties\n"
                     "2. Download and Convert ASR Model\n"
-                    "3. Press Start Recording or use Ctrl+Space\n\n"
+                    "3. Press Start Recording or use Ctrl+Space\n"
+                    "4. Toggle Continuous with Ctrl+Alt+Space\n\n"
                     "Default model: openai/whisper-base"
                 ),
             )
@@ -335,13 +338,13 @@ class VoiceInputApp:
             ),
         )
         if self.asr_engine.get_model_dir().exists():
-            self.status_var.set("Ready (Ctrl+Space / Ctrl+Shift+Space)")
+            self.status_var.set("Ready (Ctrl+Space / Ctrl+Shift+Space / Ctrl+Alt+Space)")
         else:
             self.status_var.set("Ready - Right-click -> Properties -> Download and Convert ASR Model")
 
     def _bind_hotkeys(self) -> None:
-        self.root.bind_all("<Control-KeyPress-space>", self._on_hotkey_press)
-        self.root.bind_all("<Control-KeyRelease-space>", self._on_hotkey_release)
+        self.root.bind_all("<KeyPress-space>", self._on_space_hotkey_press)
+        self.root.bind_all("<KeyRelease-space>", self._on_space_hotkey_release)
 
     def _bind_context_menu(self) -> None:
         self.context_menu = tk.Menu(self.root, tearoff=0)
@@ -634,8 +637,19 @@ class VoiceInputApp:
 
         win.protocol("WM_DELETE_WINDOW", on_close)
 
-    def _on_hotkey_press(self, event):  # noqa: ANN001
-        if event.state & 0x0001:
+    def _on_space_hotkey_press(self, event):  # noqa: ANN001
+        ctrl_pressed = bool(event.state & 0x0004)
+        shift_pressed = bool(event.state & 0x0001)
+        alt_pressed = bool(event.state & 0x0008)
+        if not ctrl_pressed:
+            return
+        if alt_pressed:
+            if self.continuous_hotkey_pressed:
+                return "break"
+            self.continuous_hotkey_pressed = True
+            self._toggle_continuous()
+            return "break"
+        if shift_pressed:
             return
         if self.hotkey_pressed:
             return "break"
@@ -643,9 +657,15 @@ class VoiceInputApp:
         self.toggle_recording()
         return "break"
 
-    def _on_hotkey_release(self, event):  # noqa: ANN001, ARG002
-        self.hotkey_pressed = False
-        return "break"
+    def _on_space_hotkey_release(self, event):  # noqa: ANN001
+        ctrl_pressed = bool(event.state & 0x0004)
+        alt_pressed = bool(event.state & 0x0008)
+        if ctrl_pressed and alt_pressed:
+            self.continuous_hotkey_pressed = False
+            return "break"
+        if ctrl_pressed:
+            self.hotkey_pressed = False
+            return "break"
 
     def _toggle_system_wide_input(self) -> None:
         if self.system_wide_input_var.get():
@@ -990,7 +1010,7 @@ class VoiceInputApp:
         self.record_button.config(state=tk.NORMAL)
         if self.continuous_button is not None:
             self.continuous_button.config(text="Continuous", bg="#2ea043", activebackground="#3fb950")
-        self.status_var.set("Ready (Ctrl+Space / Ctrl+Shift+Space)")
+        self.status_var.set("Ready (Ctrl+Space / Ctrl+Shift+Space / Ctrl+Alt+Space)")
 
     def _on_continuous_utterance(self, audio_data) -> None:  # noqa: ANN001
         """Called from ContinuousListener background thread when an utterance ends."""
