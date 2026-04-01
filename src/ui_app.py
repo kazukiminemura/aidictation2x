@@ -96,6 +96,10 @@ class VoiceInputApp:
             value=str(self.asr_defaults.get("voice_threshold", "0.02"))
         )
         self.properties_window: tk.Toplevel | None = None
+        self.asr_download_button: tk.Button | None = None
+        self.asr_download_progressbar: ttk.Progressbar | None = None
+        self.asr_download_progress_var = tk.StringVar(value="")
+        self._asr_download_in_progress = False
         self.asr_text: tk.Text | None = None
         self.dict_reading_entry: tk.Entry | None = None
         self.dict_surface_entry: tk.Entry | None = None
@@ -431,7 +435,7 @@ class VoiceInputApp:
         ).pack(anchor=tk.W, fill=tk.X)
         tk.Label(frame, text="ASR device").pack(anchor=tk.W, pady=(8, 0))
         tk.OptionMenu(frame, whisper_device_var, "gpu", "cpu", "npu").pack(anchor=tk.W, fill=tk.X)
-        tk.Button(
+        self.asr_download_button = tk.Button(
             frame,
             text="Download ASR Model",
             command=lambda: download_asr_model_from_dialog(),
@@ -444,7 +448,26 @@ class VoiceInputApp:
             pady=4,
             font=("Consolas", 9, "bold"),
             cursor="hand2",
-        ).pack(anchor=tk.W, pady=(8, 0))
+        )
+        self.asr_download_button.pack(anchor=tk.W, pady=(8, 0))
+        self.asr_download_progressbar = ttk.Progressbar(
+            frame,
+            mode="indeterminate",
+            orient=tk.HORIZONTAL,
+            length=360,
+        )
+        self.asr_download_progressbar.pack(anchor=tk.W, fill=tk.X, pady=(8, 0))
+        tk.Label(
+            frame,
+            textvariable=self.asr_download_progress_var,
+            anchor="w",
+            justify=tk.LEFT,
+            font=("Consolas", 8),
+            fg="#5a7a9b",
+        ).pack(anchor=tk.W, fill=tk.X, pady=(4, 0))
+        if self._asr_download_in_progress:
+            self.asr_download_button.config(state=tk.DISABLED)
+            self.asr_download_progressbar.start(12)
         tk.Button(
             frame,
             text="Download LLM Model",
@@ -619,6 +642,8 @@ class VoiceInputApp:
             self.dict_reading_entry = None
             self.dict_surface_entry = None
             self.dict_list = None
+            self.asr_download_button = None
+            self.asr_download_progressbar = None
             self.properties_window = None
             win.destroy()
 
@@ -633,6 +658,8 @@ class VoiceInputApp:
             self.dict_reading_entry = None
             self.dict_surface_entry = None
             self.dict_list = None
+            self.asr_download_button = None
+            self.asr_download_progressbar = None
             self.properties_window = None
             win.destroy()
 
@@ -684,6 +711,9 @@ class VoiceInputApp:
         self.asr_engine.configure(device=device, model_id=model_id)
 
     def _download_asr_model_clicked(self, model_id: str, device: str) -> None:
+        if self._asr_download_in_progress:
+            return
+        self._start_asr_download_progress(model_id, device)
         self.status_var.set(f"Preparing ASR model: {model_id}")
         threading.Thread(
             target=self._download_asr_model_worker,
@@ -719,7 +749,7 @@ class VoiceInputApp:
                 downloaded = self._directory_size_bytes(target_dir)
                 self.root.after(
                     0,
-                    self.status_var.set,
+                    self._update_asr_download_progress,
                     (
                         f"{progress['phase']} "
                         f"[{self.asr_engine.get_display_name()} | {device.upper()}] "
@@ -736,14 +766,38 @@ class VoiceInputApp:
 
     def _on_download_asr_model_done(self, model_path: str, error: str) -> None:
         if error:
+            self._stop_asr_download_progress("ASR model download failed")
             self.status_var.set("ASR model download failed")
             messagebox.showerror(
                 "ASR model download error",
                 f"{self._format_download_error(error)}\n\nLog: {self.root_dir / 'logs' / 'app.log'}",
             )
             return
+        self._stop_asr_download_progress(f"ASR model ready: {Path(model_path).name}")
         self.status_var.set(f"ASR model ready: {Path(model_path).name}")
         messagebox.showinfo("ASR model", f"Model is ready at:\n{model_path}")
+
+    def _start_asr_download_progress(self, model_id: str, device: str) -> None:
+        self._asr_download_in_progress = True
+        self.asr_download_progress_var.set(f"Preparing {model_id} on {device.upper()}...")
+        if self.asr_download_button is not None:
+            self.asr_download_button.config(state=tk.DISABLED)
+        if self.asr_download_progressbar is not None:
+            self.asr_download_progressbar.stop()
+            self.asr_download_progressbar.config(mode="indeterminate")
+            self.asr_download_progressbar.start(12)
+
+    def _update_asr_download_progress(self, message: str) -> None:
+        self.asr_download_progress_var.set(message)
+        self.status_var.set(message)
+
+    def _stop_asr_download_progress(self, message: str) -> None:
+        self._asr_download_in_progress = False
+        self.asr_download_progress_var.set(message)
+        if self.asr_download_button is not None:
+            self.asr_download_button.config(state=tk.NORMAL)
+        if self.asr_download_progressbar is not None:
+            self.asr_download_progressbar.stop()
 
     def _download_model_clicked(self) -> None:
         self.status_var.set("Downloading LLM model...")
